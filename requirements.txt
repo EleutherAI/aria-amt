@@ -1,0 +1,7 @@
+aria @ git+https://github.com/EleutherAI/aria.git
+torch >= 2.1
+torchaudio
+accelerate 
+mido
+tqdm
+jsonlines
