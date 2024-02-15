@@ -161,5 +161,6 @@ cython_debug/
 
 # Project specific
 fluidsynth/
+tests/test_results/*
 *.DS_Store
 .vscode/
