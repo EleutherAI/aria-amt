@@ -1,0 +1,12 @@
+{
+    "tokenizer": {
+        "velocity_quantization": {
+            "step": 5,
+            "default": 60
+        },
+        "time_quantization": {
+            "num_steps": 3000,
+            "step": 10
+        }
+    }
+}
