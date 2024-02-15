@@ -10,7 +10,7 @@ jobs:
       - uses: psf/black@stable
         with:
           options: "--check --verbose --line-length 80"
-          src: "./aria"
+          src: "./amt"
       - name: Check formatting result
         run: |
           if [ $? -ne 0 ]; then
