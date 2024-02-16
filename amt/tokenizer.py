@@ -1,5 +1,7 @@
 import random
 
+from collections import defaultdict
+
 from aria.data.midi import MidiDict, get_duration_ms
 from aria.tokenizer import Tokenizer
 from amt.config import load_config
@@ -258,5 +260,50 @@ class AmtTokenizer(Tokenizer):
             metadata={},
         )
 
-    def export_msg_mixup():
-        pass
+    def export_data_aug(self):
+        return [self.export_msg_mixup()]
+
+    def export_msg_mixup(self):
+        def msg_mixup(src: list):
+            # Reorder prev tokens
+            res = []
+            for idx, tok in enumerate(src):
+                tok_type, tok_data = tok
+                if tok_type != "prev":
+                    break
+                else:
+                    res.append(tok)
+
+            random.shuffle(res)  # Only includes prev toks
+            buffer = defaultdict(lambda: defaultdict(list))
+            for tok_1, tok_2, tok_3 in zip(
+                src[idx:],
+                src[idx + 1 :],
+                src[idx + 2 :],
+            ):
+                tok_1_type, tok_1_data = tok_1
+                tok_2_type, tok_2_data = tok_2
+                if tok_1_type == "on":
+                    _onset = tok_2_data
+                    buffer[_onset]["on"].append((tok_1, tok_2, tok_3))
+                elif tok_1_type == "off":
+                    _onset = tok_2_data
+                    buffer[_onset]["off"].append((tok_1, tok_2))
+                else:
+                    pass
+
+            # Shuffle order and re-append to result
+            for k, v in sorted(buffer.items()):
+                random.shuffle(v["on"])
+                random.shuffle(v["off"])
+                for item in v["off"]:
+                    res.append(item[0])  # Pitch
+                    res.append(item[1])  # Onset
+                for item in v["on"]:
+                    res.append(item[0])  # Pitch
+                    res.append(item[1])  # Onset
+                    res.append(item[2])  # Velocity
+
+            return res
+
+        return msg_mixup
