@@ -115,7 +115,7 @@ class AmtTokenizer(Tokenizer):
             if note_end_ms <= start_ms or note_start_ms >= end_ms:  # Skip
                 continue
             elif (
-                note_start_ms <= start_ms and _pitch not in prev_notes
+                note_start_ms < start_ms and _pitch not in prev_notes
             ):  # Add to prev notes
                 prev_notes.append(_pitch)
                 if note_end_ms < end_ms:
@@ -123,8 +123,15 @@ class AmtTokenizer(Tokenizer):
                         ("off", _pitch, rel_note_end_ms_q, None)
                     )
             else:  # Add to on_off_msgs
-                # Skip notes with no duration
+                # Skip notes with no duration or duplicate notes
                 if rel_note_start_ms_q == rel_note_end_ms_q:
+                    continue
+                elif (
+                    "on",
+                    _pitch,
+                    rel_note_start_ms_q,
+                    velocity_q,
+                ) in on_off_notes:
                     continue
 
                 on_off_notes.append(
@@ -190,7 +197,7 @@ class AmtTokenizer(Tokenizer):
         for tok_1, tok_2, tok_3 in zip(
             tokenized_seq[:],
             tokenized_seq[1:],
-            tokenized_seq[2:],
+            tokenized_seq[2:] + [(None, None)],
         ):
             tok_1_type, tok_1_data = tok_1
             tok_2_type, tok_2_data = tok_2
@@ -210,7 +217,7 @@ class AmtTokenizer(Tokenizer):
                     # Process note and add to note msgs
                     note_to_close = notes_to_close.pop(tok_1_data, None)
                     if note_to_close is None:
-                        print("No 'on' token corresponding to 'off' token")
+                        print(f"No 'on' token corresponding to 'off' token")
                         continue
                     else:
                         _pitch = tok_1_data
@@ -267,6 +274,7 @@ class AmtTokenizer(Tokenizer):
         def msg_mixup(src: list):
             # Reorder prev tokens
             res = []
+            idx = 0
             for idx, tok in enumerate(src):
                 tok_type, tok_data = tok
                 if tok_type != "prev":
@@ -279,7 +287,7 @@ class AmtTokenizer(Tokenizer):
             for tok_1, tok_2, tok_3 in zip(
                 src[idx:],
                 src[idx + 1 :],
-                src[idx + 2 :],
+                src[idx + 2 :] + [(None, None)],
             ):
                 tok_1_type, tok_1_data = tok_1
                 tok_2_type, tok_2_data = tok_2
