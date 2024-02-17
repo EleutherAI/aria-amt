@@ -16,16 +16,11 @@ from safetensors.torch import load_file
 from logging.handlers import RotatingFileHandler
 from tqdm import tqdm
 
-from aria.config import load_model_config
-from aria.model import ModelConfig, TransformerLM
-from aria.tokenizer import Tokenizer, AbsTokenizer, RelTokenizer
-from aria.data.datasets import (
-    TrainingDataset,
-    PretrainingDataset,
-    FinetuningDataset,
-)
+from amt.tokenizer import AmtTokenizer
+from amt.model import AmtEncoderDecoder, ModelConfig
+from amt.data import AmtDataset
+from amt.config import load_model_config
 from aria.utils import _load_weight
-
 
 # ----- USAGE -----
 #
@@ -36,30 +31,27 @@ from aria.utils import _load_weight
 #
 # For example usage you could run the pre-training script with:
 #
-# accelerate launch [arguments] aria/train.py pretrain \
+# accelerate launch [arguments] amt/train.py pretrain \
 #   small \
-#   data/train \
-#   data/val \
+#   data/train.jsonl \
+#   data/val.jsonl \
 #   -epochs 10 \
-#   -bs 32 \
+#   -bs 4 \
 #   -workers 8
 #
 # You could resume a run from an accelerate checkpoint with:
 #
-# accelerate launch [arguments] aria/train.py resume \
+# accelerate launch [arguments] amt/train.py resume \
 #   small \
 #   pretrain \
-#   data/train \
-#   data/val \
+#   data/train.jsonl \
+#   data/val.jsonl \
 #   -cdir models/epoch5_step0 \
 #   -rstep 0 \
 #   -repoch 5 \
 #   -epochs 5 \
-#   -bs 32 \
+#   -bs 4 \
 #   -workers 8
-
-# TODO:
-# - Test that everything works on a distributed setup
 
 
 def setup_logger(project_dir: str):
@@ -87,21 +79,6 @@ def setup_logger(project_dir: str):
     logger.addHandler(ch)
 
     return get_logger(__name__)  # using accelerate.logging.get_logger()
-
-
-def get_tokenizer_name(
-    train_data_path: str,
-    val_data_path: str,
-):
-    """This will throw an error if there is a tokenizer mismatch"""
-    train_config = TrainingDataset.get_config_from_path(train_data_path)
-    val_config = TrainingDataset.get_config_from_path(val_data_path)
-
-    assert (
-        train_config["tokenizer_name"] == val_config["tokenizer_name"]
-    ), "Dataset tokenizers don't match"
-
-    return train_config["tokenizer_name"]
 
 
 def setup_project_dir(project_dir: str | None):
@@ -226,83 +203,20 @@ def get_finetune_optim(
     )
 
 
-def get_pretrain_dataloaders(
-    train_data_dir: str,
-    val_data_dir: str,
-    tokenizer: Tokenizer,
-    batch_size: int,
-    num_workers: int,
-    init_epoch: int | None = None,
-    apply_aug: bool = True,
-):
-    logger = logging.getLogger(__name__)
-    train_dataset = PretrainingDataset(
-        dir_path=train_data_dir,
-        tokenizer=tokenizer,
-    )
-    val_dataset = PretrainingDataset(
-        dir_path=val_data_dir,
-        tokenizer=tokenizer,
-    )
-
-    if init_epoch:
-        if init_epoch > train_dataset.num_epochs:
-            logger.warning(
-                f"Provided init_epoch is larger than the number of epoch files "
-                f"located in {train_data_dir}. The default behaviour in this case "
-                f"is to load the epochs in a cyclic fashion."
-            )
-        train_dataset.init_epoch(idx=init_epoch)
-
-    assert (
-        val_dataset.num_epochs == 1
-    ), "val-data directory should only contain one epoch"
-
-    if apply_aug:
-        train_dataset.set_transform(tokenizer.export_data_aug())
-
-    train_dataloader = DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        num_workers=num_workers,
-        shuffle=False,
-    )
-    val_dataloader = DataLoader(
-        val_dataset,
-        batch_size=batch_size,
-        num_workers=num_workers,
-        shuffle=False,
-    )
-
-    return train_dataloader, val_dataloader
-
-
-def get_finetune_dataloaders(
+def get_dataloaders(
     train_data_path: str,
     val_data_path: str,
-    tokenizer: Tokenizer,
     batch_size: int,
     num_workers: int,
-    apply_aug: bool = True,
 ):
-    """Returns tuple: (train_dataloader, val_dataloader)"""
-    train_dataset = FinetuningDataset(
-        file_path=train_data_path,
-        tokenizer=tokenizer,
-    )
-    val_dataset = FinetuningDataset(
-        file_path=val_data_path,
-        tokenizer=tokenizer,
-    )
-
-    if apply_aug:
-        train_dataset.set_transform(tokenizer.export_data_aug())
+    train_dataset = AmtDataset(load_path=train_data_path)
+    val_dataset = AmtDataset(load_path=val_data_path)
 
     train_dataloader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         num_workers=num_workers,
-        shuffle=False,
+        shuffle=True,  # Maybe remove
     )
     val_dataloader = DataLoader(
         val_dataset,
@@ -322,24 +236,11 @@ def rolling_average(prev_avg: float, x_n: float, n: int):
         return ((prev_avg * (n - 1)) / n) + (x_n / n)
 
 
-# TODO: Make sure this works correctly when running on multiple gpus. Seriously
-# step through to make sure that there are no issues when using accelerate.
-# The following is a individual list of things that I want to test.
-#
-# - Add a print statement for the size of the batches inside each model. Does
-#   each model receive the same batch? Are the batches split into different
-#   slices?
-# - What happens when we use a print statement with accelerate launch with
-#   multiple gpus? What happens when we use a normal logger instead of the
-#   accelerate one?
-# - See this for more information about how things should run in raw torch,
-#   https://pytorch.org/tutorials/beginner/former_torchies/parallelism_tutorial.html
-
-
+# TODO: Test that loss/backprop is working correctly (look at shapes)
 def _train(
     epochs: int,
     accelerator: accelerate.Accelerator,
-    model: TransformerLM,
+    model: AmtEncoderDecoder,
     train_dataloader: DataLoader,
     val_dataloader: DataLoader,
     optimizer: torch.optim.Optimizer,
@@ -352,8 +253,8 @@ def _train(
     def profile_flops(dataloader: DataLoader):
         def _bench():
             for batch in dataloader:
-                src, tgt = batch  # (b_sz, s_len), (b_sz, s_len, v_sz)
-                logits = model(src)  # (b_sz, s_len, v_sz)
+                mel, src, tgt = batch  # (b_sz, s_len), (b_sz, s_len, v_sz)
+                logits = model(mel, src)  # (b_sz, s_len, v_sz)
                 logits = logits.transpose(1, 2)
                 loss = loss_fn(logits, tgt)
 
@@ -412,8 +313,8 @@ def _train(
             )
         ):
             step = __step + _resume_step + 1
-            src, tgt = batch  # (b_sz, s_len), (b_sz, s_len, v_sz)
-            logits = model(src)  # (b_sz, s_len, v_sz)
+            mel, src, tgt = batch  # (b_sz, s_len), (b_sz, s_len, v_sz)
+            logits = model(mel, src)  # (b_sz, s_len, v_sz)
             logits = logits.transpose(1, 2)  # Transpose for CrossEntropyLoss
             loss = loss_fn(logits, tgt)
 
@@ -475,9 +376,9 @@ def _train(
                 leave=False,
             )
         ):
-            src, tgt = batch  # (b_sz, s_len), (b_sz, s_len, v_sz)
+            mel, src, tgt = batch
             with torch.no_grad():
-                logits = model(src)  # (b_sz, s_len, v_sz)
+                logits = model(mel, src)
             logits = logits.transpose(1, 2)  # Transpose for CrossEntropyLoss
             loss = loss_fn(logits, tgt)
 
@@ -579,31 +480,12 @@ def resume_train(
     assert batch_size > 0, "Invalid batch size"
     assert torch.cuda.is_available() is True, "CUDA not available"
     assert os.path.isdir(checkpoint_dir), f"No dir at {checkpoint_dir}"
-    if mode == "finetune":
-        assert os.path.isfile(
-            train_data_path
-        ), f"No file found at {train_data_path}"
-        assert os.path.isfile(
-            val_data_path
-        ), f"No file found at {val_data_path}"
-    elif mode == "pretrain":
-        assert os.path.isdir(
-            train_data_path
-        ), f"No dir found at {train_data_path}"
-        assert os.path.isdir(val_data_path), f"No dir found at {val_data_path}"
-    else:
-        raise Exception
+    assert os.path.isfile(
+        train_data_path
+    ), f"No file found at {train_data_path}"
+    assert os.path.isfile(val_data_path), f"No file found at {val_data_path}"
 
-    tokenizer_name = get_tokenizer_name(train_data_path, val_data_path)
-    if tokenizer_name == "abs":
-        tokenizer = AbsTokenizer(return_tensors=True)
-    elif tokenizer_name == "rel":
-        tokenizer = RelTokenizer(return_tensors=True)
-    else:
-        raise Exception("Invalid tokenizer name")
-
-    # TODO: Add support for verifying the resume_step and epoch, keep these
-    # save these variables as part of the state during checkpointing
+    tokenizer = AmtTokenizer()
     accelerator = accelerate.Accelerator(project_dir=project_dir)
     if accelerator.is_main_process:
         project_dir = setup_project_dir(project_dir)
@@ -636,32 +518,23 @@ def resume_train(
     # Init model
     model_config = ModelConfig(**load_model_config(model_name))
     model_config.set_vocab_size(tokenizer.vocab_size)
-    model = TransformerLM(model_config)
+    model = AmtEncoderDecoder(model_config)
+    logger.info(f"Loaded model with config: {load_model_config(model_name)}")
+
+    train_dataloader, val_dataloader = get_dataloaders(
+        train_data_path=train_data_path,
+        val_data_path=val_data_path,
+        batch_size=batch_size,
+        num_workers=num_workers,
+    )
 
     if mode == "pretrain":
-        train_dataloader, val_dataloader = get_pretrain_dataloaders(
-            train_data_dir=train_data_path,
-            val_data_dir=val_data_path,
-            tokenizer=tokenizer,
-            init_epoch=resume_epoch,
-            batch_size=batch_size,
-            num_workers=num_workers,
-            apply_aug=True,
-        )
         optimizer, scheduler = get_pretrain_optim(
             model,
             num_epochs=epochs,
             steps_per_epoch=len(train_dataloader),
         )
     elif mode == "finetune":
-        train_dataloader, val_dataloader = get_finetune_dataloaders(
-            train_data_path=train_data_path,
-            val_data_path=val_data_path,
-            tokenizer=tokenizer,
-            batch_size=batch_size,
-            num_workers=num_workers,
-            apply_aug=True,
-        )
         optimizer, scheduler = get_finetune_optim(
             model,
             num_epochs=epochs,
@@ -669,17 +542,6 @@ def resume_train(
         )
     else:
         raise Exception
-
-    if (
-        model_config.yarn_config is None
-        or model_config.yarn_config.scale <= 1.0
-    ):
-        assert (
-            train_dataloader.dataset.max_seq_len == model_config.max_seq_len
-        ), "max_seq_len differs between datasets and model config"
-        assert (
-            val_dataloader.dataset.max_seq_len == model_config.max_seq_len
-        ), "max_seq_len differs between datasets and model config"
 
     (
         model,
@@ -739,30 +601,14 @@ def train(
     assert epochs > 0, "Invalid number of epochs"
     assert batch_size > 0, "Invalid batch size"
     assert torch.cuda.is_available() is True, "CUDA not available"
+    assert os.path.isfile(
+        train_data_path
+    ), f"No file found at {train_data_path}"
+    assert os.path.isfile(val_data_path), f"No file found at {val_data_path}"
     if mode == "finetune":
         assert os.path.isfile(finetune_cp_path), "Invalid checkpoint path"
-        assert os.path.isfile(
-            train_data_path
-        ), f"No file found at {train_data_path}"
-        assert os.path.isfile(
-            val_data_path
-        ), f"No file found at {val_data_path}"
-    elif mode == "pretrain":
-        assert os.path.isdir(
-            train_data_path
-        ), f"No dir found at {train_data_path}"
-        assert os.path.isdir(val_data_path), f"No dir found at {val_data_path}"
-    else:
-        raise Exception
 
-    tokenizer_name = get_tokenizer_name(train_data_path, val_data_path)
-    if tokenizer_name == "abs":
-        tokenizer = AbsTokenizer(return_tensors=True)
-    elif tokenizer_name == "rel":
-        tokenizer = RelTokenizer(return_tensors=True)
-    else:
-        raise Exception("Invalid tokenizer name")
-
+    tokenizer = AmtTokenizer()
     accelerator = accelerate.Accelerator(project_dir=project_dir)
     if accelerator.is_main_process:
         project_dir = setup_project_dir(project_dir)
@@ -782,44 +628,30 @@ def train(
     # Init model
     model_config = ModelConfig(**load_model_config(model_name))
     model_config.set_vocab_size(tokenizer.vocab_size)
-    model = TransformerLM(model_config)
+    model = AmtEncoderDecoder(model_config)
     logger.info(f"Loaded model with config: {load_model_config(model_name)}")
     if mode == "finetune":
         try:
             model.load_state_dict(_load_weight(finetune_cp_path))
         except Exception as e:
-            raise Exception(
-                f"Failed to load checkpoint: {e}\n"
-                "This could be due to a mismatch between the tokenizer used "
-                "to build the pre-training and fine-tuning datasets"
-            )
+            raise Exception(f"Failed to load checkpoint: {e}")
         logger.info(
             f"Loaded finetune checkpoint located at: {finetune_cp_path}"
         )
 
+    train_dataloader, val_dataloader = get_dataloaders(
+        train_data_path=train_data_path,
+        val_data_path=val_data_path,
+        batch_size=batch_size,
+        num_workers=num_workers,
+    )
     if mode == "pretrain":
-        train_dataloader, val_dataloader = get_pretrain_dataloaders(
-            train_data_dir=train_data_path,
-            val_data_dir=val_data_path,
-            tokenizer=tokenizer,
-            batch_size=batch_size,
-            num_workers=num_workers,
-            apply_aug=True,
-        )
         optimizer, scheduler = get_pretrain_optim(
             model,
             num_epochs=epochs,
             steps_per_epoch=len(train_dataloader),
         )
     elif mode == "finetune":
-        train_dataloader, val_dataloader = get_finetune_dataloaders(
-            train_data_path=train_data_path,
-            val_data_path=val_data_path,
-            tokenizer=tokenizer,
-            batch_size=batch_size,
-            num_workers=num_workers,
-            apply_aug=True,
-        )
         optimizer, scheduler = get_finetune_optim(
             model,
             num_epochs=epochs,
@@ -827,17 +659,6 @@ def train(
         )
     else:
         raise Exception
-
-    if (
-        model_config.yarn_config is None
-        or model_config.yarn_config.scale <= 1.0
-    ):
-        assert (
-            train_dataloader.dataset.max_seq_len == model_config.max_seq_len
-        ), "max_seq_len differs between datasets and model config"
-        assert (
-            val_dataloader.dataset.max_seq_len == model_config.max_seq_len
-        ), "max_seq_len differs between datasets and model config"
 
     (
         model,
@@ -878,32 +699,23 @@ def convert_cp_from_safetensors(checkpoint_path: str, save_path: str):
 
 
 def convert_cp_from_accelerate(
-    model_name: str, tokenizer_name: str, checkpoint_dir: str, save_path: str
+    model_name: str,
+    checkpoint_dir: str,
+    save_path: str,
 ):
-    def _load_state_dict(_tokenizer: Tokenizer):
-        model_config = ModelConfig(**load_model_config(model_name))
-        model_config.set_vocab_size(_tokenizer.vocab_size)
-        model = TransformerLM(model_config)
-        model = accelerator.prepare(model)
-        accelerator.load_state(checkpoint_dir)
-
-        return model.state_dict()
+    tokenizer = AmtTokenizer()
+    model_config = ModelConfig(**load_model_config(model_name))
+    model_config.set_vocab_size(tokenizer.vocab_size)
+    model = AmtEncoderDecoder(model_config)
 
     accelerator = accelerate.Accelerator()
-
-    # Try both
-    if tokenizer_name == "abs":
-        state_dict = _load_state_dict(_tokenizer=AbsTokenizer())
-    elif tokenizer_name == "rel":
-        state_dict = _load_state_dict(_tokenizer=RelTokenizer())
-    else:
-        print("Invalid choice of tokenizer")
-
-    torch.save(state_dict, save_path)
+    model = accelerator.prepare(model)
+    accelerator.load_state(checkpoint_dir)
+    torch.save(model.state_dict(), save_path)
 
 
 def parse_resume_args():
-    argp = argparse.ArgumentParser(prog="python aria/train.py resume")
+    argp = argparse.ArgumentParser(prog="python amt/train.py resume")
     argp.add_argument("model", help="name of model config file")
     argp.add_argument("resume_mode", help="training mode", choices=["pt", "ft"])
     argp.add_argument("train_data", help="path to train data")
@@ -923,7 +735,7 @@ def parse_resume_args():
 
 
 def parse_train_args():
-    argp = argparse.ArgumentParser(prog="python aria/train.py pretrain")
+    argp = argparse.ArgumentParser(prog="python amt/train.py pretrain")
     argp.add_argument("model", help="name of model config file")
     argp.add_argument("train_data", help="path to train dir")
     argp.add_argument("val_data", help="path to val dir")
@@ -938,28 +750,10 @@ def parse_train_args():
     return argp.parse_args(sys.argv[2:])
 
 
-def parse_finetune_args():
-    argp = argparse.ArgumentParser(prog="python aria/train.py finetune")
-    argp.add_argument("model", help="name of model config file")
-    argp.add_argument("cp", help="path to ft checkpoint", type=str)
-    argp.add_argument("train_data", help="path to train data")
-    argp.add_argument("val_data", help="path to val data")
-    argp.add_argument("-epochs", help="train epochs", type=int, required=True)
-    argp.add_argument("-bs", help="batch size", type=int, default=32)
-    argp.add_argument("-workers", help="number workers", type=int, default=1)
-    argp.add_argument("-pdir", help="project dir", type=str, required=False)
-    argp.add_argument(
-        "-spc", help="steps per checkpoint", type=int, required=False
-    )
-
-    return argp.parse_args(sys.argv[2:])
-
-
-# This entrypoint has not been tested properly.
 if __name__ == "__main__":
     # Nested argparse inspired by - https://shorturl.at/kuKW0
     parser = argparse.ArgumentParser(
-        usage="python aria/train.py <command> [<args>]"
+        usage="python amt/train.py <command> [<args>]"
     )
     parser.add_argument(
         "mode", help="training mode", choices=("pretrain", "finetune", "resume")

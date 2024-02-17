@@ -8,19 +8,25 @@ from torch import Tensor, nn
 from dataclasses import dataclass
 from typing import Dict, Iterable, Optional
 
+# TODO:
+# Go through and make this more efficient using flash attention ect...
+
 
 @dataclass
-class ModelDimensions:
+class ModelConfig:
     n_mels: int
     n_audio_ctx: int
     n_audio_state: int
     n_audio_head: int
     n_audio_layer: int
-    n_vocab: int
     n_text_ctx: int
     n_text_state: int
     n_text_head: int
     n_text_layer: int
+    n_vocab: Optional[int] = None
+
+    def set_vocab_size(self, vocab_size: int):
+        self.vocab_size = vocab_size
 
 
 class LayerNorm(nn.LayerNorm):
@@ -229,8 +235,8 @@ class TextDecoder(nn.Module):
         return logits
 
 
-class Whisper(nn.Module):
-    def __init__(self, dims: ModelDimensions):
+class AmtEncoderDecoder(nn.Module):
+    def __init__(self, dims: ModelConfig):
         super().__init__()
         self.dims = dims
         self.encoder = AudioEncoder(
@@ -274,9 +280,7 @@ class Whisper(nn.Module):
     def logits(self, tokens: torch.Tensor, audio_features: torch.Tensor):
         return self.decoder(tokens, audio_features)
 
-    def forward(
-        self, mel: torch.Tensor, tokens: torch.Tensor
-    ) -> Dict[str, torch.Tensor]:
+    def forward(self, mel: torch.Tensor, tokens: torch.Tensor) -> torch.Tensor:
         return self.decoder(tokens, self.encoder(mel))
 
     @property
