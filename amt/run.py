@@ -50,10 +50,10 @@ def build_maestro(args):
                 os.path.join(args.dir, entry["midi_filename"])
             )
 
-            if not os.path.isfile(audio_path) or os.path.isfile(audio_path):
-                # print("File missing - skipping")
-                # print(audio_path)
-                # print(midi_path)
+            if not os.path.isfile(audio_path) or not os.path.isfile(audio_path):
+                print("File missing - skipping")
+                print(audio_path)
+                print(midi_path)
                 continue
 
             if entry["split"] == "train":
