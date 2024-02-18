@@ -188,6 +188,8 @@ class AmtTokenizer(Tokenizer):
         # skip converting between ticks and ms
         TICKS_PER_BEAT = 500
         TEMPO = 500000
+        if self.pad_tok in tokenized_seq:
+            tokenized_seq = tokenized_seq[: tokenized_seq.index(self.pad_tok)]
 
         meta_msgs = []
         pedal_msgs = []
@@ -277,12 +279,20 @@ class AmtTokenizer(Tokenizer):
             metadata={},
         )
 
+    def trunc_seq(self, seq: list, seq_len: int):
+        """Truncate or pad sequence to feature sequence length."""
+        seq += [self.pad_tok] * (seq_len - len(seq))
+
+        return seq[:seq_len]
+
     def export_data_aug(self):
         return [self.export_msg_mixup()]
 
     def export_msg_mixup(self):
         def msg_mixup(src: list):
             # Reorder prev tokens
+            orig_len = len(src)
+            seen_pad_tok = False
             res = []
             idx = 0
             for idx, tok in enumerate(src):
@@ -299,6 +309,10 @@ class AmtTokenizer(Tokenizer):
                 src[idx + 1 :],
                 src[idx + 2 :] + [(None, None)],
             ):
+                if tok_2 == self.pad_tok:
+                    seen_pad_tok = True
+                    break
+
                 tok_1_type, tok_1_data = tok_1
                 tok_2_type, tok_2_data = tok_2
                 if tok_1_type == "on":
@@ -322,6 +336,9 @@ class AmtTokenizer(Tokenizer):
                     res.append(item[1])  # Onset
                     res.append(item[2])  # Velocity
 
-            return res
+            if seen_pad_tok is True:
+                return self.trunc_seq(res, orig_len)
+            else:
+                return res
 
         return msg_mixup

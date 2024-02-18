@@ -34,9 +34,12 @@ class TestAmtDataset(unittest.TestCase):
         tokenizer = AmtTokenizer()
         for idx, (spec, src, tgt) in enumerate(dataset):
             print(spec.shape, src.shape, tgt.shape)
-            decoded = tokenizer.decode(src)
+            src_decoded = tokenizer.decode(src)
+            tgt_decoded = tokenizer.decode(tgt)
+            self.assertListEqual(src_decoded[1:], tgt_decoded[:-1])
+
             mid = tokenizer._detokenize_midi_dict(
-                decoded, len_ms=30000
+                src_decoded, len_ms=30000
             ).to_midi()
             mid.save(f"tests/test_results/trunc_{idx}.mid")
 

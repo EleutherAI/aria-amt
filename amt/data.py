@@ -62,6 +62,7 @@ def get_features_mp(args):
 class AmtDataset(torch.utils.data.Dataset):
     def __init__(self, load_path: str):
         self.tokenizer = AmtTokenizer(return_tensors=True)
+        self.config = load_config()["data"]
         self.aug_fn = self.tokenizer.export_msg_mixup()
         self.file_buff = open(load_path, mode="r")
         self.file_mmap = mmap.mmap(
@@ -91,14 +92,22 @@ class AmtDataset(torch.utils.data.Dataset):
         self.file_mmap.seek(self.index[idx])
 
         # This isn't going to load properly
-        spec, seq = json.loads(self.file_mmap.readline())  # Load data from line
+        spec, _seq = json.loads(
+            self.file_mmap.readline()
+        )  # Load data from line
 
         spec = torch.tensor(spec)  # Format spectrogram into tensor
-        seq = [_format(tok) for tok in seq]  # Format seq
-        seq = self.aug_fn(seq)  # Data augmentation
+        _seq = [_format(tok) for tok in _seq]  # Format seq
+        _seq = self.aug_fn(_seq)  # Data augmentation
 
-        src = seq
-        tgt = seq[1:] + [self.tokenizer.pad_tok]
+        src = self.tokenizer.trunc_seq(
+            seq=_seq,
+            seq_len=self.config["max_seq_len"],
+        )
+        tgt = self.tokenizer.trunc_seq(
+            seq=_seq[1:],
+            seq_len=self.config["max_seq_len"],
+        )
 
         return spec, self.tokenizer.encode(src), self.tokenizer.encode(tgt)
 

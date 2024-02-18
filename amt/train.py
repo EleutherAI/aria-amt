@@ -527,6 +527,10 @@ def resume_train(
         batch_size=batch_size,
         num_workers=num_workers,
     )
+    assert (
+        model_config.n_text_ctx
+        == train_dataloader.dataset.config["max_seq_len"]
+    ), "seq_len mismatch between dataset and model"
 
     if mode == "pretrain":
         optimizer, scheduler = get_pretrain_optim(
@@ -645,6 +649,11 @@ def train(
         batch_size=batch_size,
         num_workers=num_workers,
     )
+    assert (
+        model_config.n_text_ctx
+        == train_dataloader.dataset.config["max_seq_len"]
+    ), "seq_len mismatch between dataset and model"
+
     if mode == "pretrain":
         optimizer, scheduler = get_pretrain_optim(
             model,

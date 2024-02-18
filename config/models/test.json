@@ -4,7 +4,7 @@
     "n_audio_state": 64,
     "n_audio_head": 4,
     "n_audio_layer": 4,
-    "n_text_ctx": 1024,
+    "n_text_ctx": 2048,
     "n_text_state": 64,
     "n_text_head": 4,
     "n_text_layer": 4
