@@ -128,7 +128,7 @@ class AmtDataset(torch.utils.data.Dataset):
                 results = pool.imap(get_features_mp, _matched_load_paths)
                 num_paths = len(_matched_load_paths)
                 for idx, (success, res) in enumerate(results):
-                    if idx % 50 == 0 and idx != 0:
+                    if idx % 10 == 0 and idx != 0:
                         print(f"Processed audio-mid pairs: {idx}/{num_paths}")
 
                     if success == False:
