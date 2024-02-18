@@ -16,6 +16,9 @@ from amt.config import load_config
 # Instead of doing this, we could calculate beams at inference time, selecting
 # the note with the first onset so that we don't miss notes.
 
+# TODO: Need to add start token so that we have an entry point for doing next
+# token prediction
+
 
 class AmtTokenizer(Tokenizer):
     """MidiDict tokenizer designed for AMT"""
@@ -181,13 +184,16 @@ class AmtTokenizer(Tokenizer):
                     tokenized_seq.append(("onset", _onset))
                     note_status[_pitch] = False
 
-        return tokenized_seq
+        return [self.bos_tok] + tokenized_seq
 
     def _detokenize_midi_dict(self, tokenized_seq: list, len_ms: int):
         # NOTE: These values chosen so that 1000 ticks = 1000ms, allowing us to
         # skip converting between ticks and ms
         TICKS_PER_BEAT = 500
         TEMPO = 500000
+
+        if tokenized_seq[0] == self.bos_tok:
+            tokenized_seq = tokenized_seq[1:]
         if self.pad_tok in tokenized_seq:
             tokenized_seq = tokenized_seq[: tokenized_seq.index(self.pad_tok)]
 
@@ -290,9 +296,13 @@ class AmtTokenizer(Tokenizer):
 
     def export_msg_mixup(self):
         def msg_mixup(src: list):
-            # Reorder prev tokens
             orig_len = len(src)
             seen_pad_tok = False
+
+            if src[0] == self.bos_tok:
+                src = src[1:]
+
+            # Reorder prev tokens
             res = []
             idx = 0
             for idx, tok in enumerate(src):
@@ -336,6 +346,7 @@ class AmtTokenizer(Tokenizer):
                     res.append(item[1])  # Onset
                     res.append(item[2])  # Velocity
 
+            res = [self.bos_tok] + res
             if seen_pad_tok is True:
                 return self.trunc_seq(res, orig_len)
             else:
