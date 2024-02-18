@@ -120,7 +120,7 @@ class AmtDataset(torch.utils.data.Dataset):
         cls,
         matched_load_paths: list[tuple[str, str]],
         save_path: str,
-        num_processes: int = 1,
+        num_processes: int = None,
         audio_aug_hook: Callable | None = None,
     ):
         def _get_features(_matched_load_paths: list):
