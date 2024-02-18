@@ -20,18 +20,24 @@ config = load_config()["data"]
 STRIDE_FACTOR = config["stride_factor"]
 
 
-def get_features(audio_path: str, mid_path: str):
+def get_features(audio_path: str, mid_path: str | None):
     """This function yields tuples of matched log mel spectrograms and
-    tokenized sequences (np.array, list).
+    tokenized sequences (np.array, list). If it is given only an audio path
+    then it will return an empty list for the mid_feature
     """
     tokenizer = AmtTokenizer()
 
-    if not os.path.isfile(audio_path) or not os.path.isfile(mid_path):
+    if not os.path.isfile(audio_path):
+        return None
+    if (mid_path is not None) and (not os.path.isfile(mid_path)):
         return None
 
     try:
-        midi_dict = MidiDict.from_midi(mid_path)
         log_spec = log_mel_spectrogram(audio=audio_path)
+        if mid_path is not None:
+            midi_dict = MidiDict.from_midi(mid_path)
+        else:
+            midi_dict = None
     except Exception as e:
         print("Failed to convert files into features")
         return None
@@ -40,11 +46,15 @@ def get_features(audio_path: str, mid_path: str):
     res = []
     for start_frame in range(0, total_frames, N_FRAMES // STRIDE_FACTOR):
         audio_feature = pad_or_trim(log_spec[:, start_frame:], length=N_FRAMES)
-        mid_feature = tokenizer._tokenize_midi_dict(
-            midi_dict=midi_dict,
-            start_ms=start_frame * 10,
-            end_ms=(start_frame + N_FRAMES) * 10,
-        )
+        if midi_dict:
+            mid_feature = tokenizer._tokenize_midi_dict(
+                midi_dict=midi_dict,
+                start_ms=start_frame * 10,
+                end_ms=(start_frame + N_FRAMES) * 10,
+            )
+        else:
+            mid_feature = []
+
         res.append((audio_feature, mid_feature))
 
     return res
@@ -133,17 +143,26 @@ class AmtDataset(torch.utils.data.Dataset):
         audio_aug_hook: Callable | None = None,
     ):
         def _get_features(_matched_load_paths: list):
-            with Pool(num_processes) as pool:
-                results = pool.imap(get_features_mp, _matched_load_paths)
-                num_paths = len(_matched_load_paths)
-                for idx, (success, res) in enumerate(results):
-                    if idx % 10 == 0 and idx != 0:
-                        print(f"Processed audio-mid pairs: {idx}/{num_paths}")
+            num_paths = len(_matched_load_paths)
+            for idx, entry in enumerate(_matched_load_paths):
+                success, res = get_features_mp(entry)
+                if idx % 10 == 0 and idx != 0:
+                    print(f"Processed audio-mid pairs: {idx}/{num_paths}")
+                if success == False:
+                    continue
+                for _audio_feature, _mid_feature in res:
+                    yield _audio_feature.tolist(), _mid_feature
+            # with Pool(num_processes) as pool:
+            # results = pool.imap(get_features_mp, _matched_load_paths)
+            # num_paths = len(_matched_load_paths)
+            # for idx, (success, res) in enumerate(results):
+            #     if idx % 10 == 0 and idx != 0:
+            #         print(f"Processed audio-mid pairs: {idx}/{num_paths}")
 
-                    if success == False:
-                        continue
-                    for _audio_feature, _mid_feature in res:
-                        yield _audio_feature.tolist(), _mid_feature
+            #     if success == False:
+            #         continue
+            #     for _audio_feature, _mid_feature in res:
+            #         yield _audio_feature.tolist(), _mid_feature
 
         with jsonlines.open(save_path, mode="w") as writer:
             for audio_feature, mid_feature in _get_features(matched_load_paths):
