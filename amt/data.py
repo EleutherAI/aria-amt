@@ -120,10 +120,11 @@ class AmtDataset(torch.utils.data.Dataset):
         cls,
         matched_load_paths: list[tuple[str, str]],
         save_path: str,
+        num_processes: int = 1,
         audio_aug_hook: Callable | None = None,
     ):
         def _get_features(_matched_load_paths: list):
-            with Pool(4) as pool:
+            with Pool(num_processes) as pool:
                 results = pool.imap(get_features_mp, _matched_load_paths)
                 num_paths = len(_matched_load_paths)
                 for idx, (success, res) in enumerate(results):
