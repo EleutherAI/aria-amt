@@ -7,6 +7,16 @@ from aria.tokenizer import Tokenizer
 from amt.config import load_config
 
 
+# 3am idea:
+# Randomly mixup the order of on/off msgs in small windows (100ms?)
+# This way the model can bo back and add notes in the past at inference time
+# Make this easy codewise by sorting the msgs by onset when converting from
+# tokenized_seq to midi_dict
+
+# Instead of doing this, we could calculate beams at inference time, selecting
+# the note with the first onset so that we don't miss notes.
+
+
 class AmtTokenizer(Tokenizer):
     """MidiDict tokenizer designed for AMT"""
 
