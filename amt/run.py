@@ -29,8 +29,8 @@ def _parse_transcribe_args():
     argp = argparse.ArgumentParser(prog="amt transcribe")
     argp.add_argument("model_name", help="name of model config file")
     argp.add_argument("cp", help="checkpoint path")
-    argp.add_argument("load_path", help="wav file load path", required=True)
-    argp.add_argument("save_path", help="midi file save path", required=True)
+    argp.add_argument("load_path", help="wav file load path")
+    argp.add_argument("save_path", help="midi file save path")
 
     return argp.parse_args(sys.argv[2:])
 
@@ -131,7 +131,7 @@ def main():
     parser.add_argument(
         "command",
         help="command to run",
-        choices=("maestro",),
+        choices=("maestro", "transcribe"),
     )
 
     # parse_args defaults to [1:] for args, but you need to
