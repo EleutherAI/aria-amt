@@ -26,7 +26,7 @@ class ModelConfig:
     n_vocab: Optional[int] = None
 
     def set_vocab_size(self, vocab_size: int):
-        self.vocab_size = vocab_size
+        self.n_vocab = vocab_size
 
 
 class LayerNorm(nn.LayerNorm):
