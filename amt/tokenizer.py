@@ -186,7 +186,12 @@ class AmtTokenizer(Tokenizer):
 
         return [self.bos_tok] + tokenized_seq
 
-    def _detokenize_midi_dict(self, tokenized_seq: list, len_ms: int):
+    def _detokenize_midi_dict(
+        self,
+        tokenized_seq: list,
+        len_ms: int,
+        return_unclosed_notes: bool = False,
+    ):
         # NOTE: These values chosen so that 1000 ticks = 1000ms, allowing us to
         # skip converting between ticks and ms
         TICKS_PER_BEAT = 500
@@ -275,7 +280,7 @@ class AmtTokenizer(Tokenizer):
                 }
             )
 
-        return MidiDict(
+        midi_dict = MidiDict(
             meta_msgs=meta_msgs,
             tempo_msgs=tempo_msgs,
             pedal_msgs=pedal_msgs,
@@ -284,6 +289,11 @@ class AmtTokenizer(Tokenizer):
             ticks_per_beat=TICKS_PER_BEAT,
             metadata={},
         )
+
+        if return_unclosed_notes is True:
+            return midi_dict, notes_to_close
+        else:
+            return midi_dict
 
     def trunc_seq(self, seq: list, seq_len: int):
         """Truncate or pad sequence to feature sequence length."""
