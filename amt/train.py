@@ -172,7 +172,7 @@ def get_pretrain_optim(
 ):
     LR = 3e-4
     END_RATIO = 0.1
-    WARMUP_STEPS = 1000
+    WARMUP_STEPS = 200
 
     return _get_optim(
         lr=LR,
@@ -209,8 +209,12 @@ def get_dataloaders(
     batch_size: int,
     num_workers: int,
 ):
+    logger = get_logger(__name__)
     train_dataset = AmtDataset(load_path=train_data_path)
     val_dataset = AmtDataset(load_path=val_data_path)
+    logger.info(
+        f"Loaded datasets with length: train={len(train_dataset)}; val={len(val_dataset)}"
+    )
 
     train_dataloader = DataLoader(
         train_dataset,
@@ -291,7 +295,12 @@ def _train(
 
     # This is all slightly messy as train_loop and val_loop make use of the
     # variables in the wider scope. Perhaps refactor this at some point.
-    def train_loop(dataloader: DataLoader, _epoch: int, _resume_step: int = 0):
+    def train_loop(
+        dataloader: DataLoader,
+        _epoch: int,
+        _resume_step: int = 0,
+        overfit: bool = False,
+    ):
         avg_train_loss = 0
         trailing_loss = 0
         loss_buffer = []
@@ -304,6 +313,8 @@ def _train(
             lr_for_print = "{:.2e}".format(optimizer.param_groups[-1]["lr"])
 
         model.train()
+        of_batch_exists = False
+
         for __step, batch in (
             pbar := tqdm(
                 enumerate(dataloader),
@@ -313,6 +324,14 @@ def _train(
             )
         ):
             step = __step + _resume_step + 1
+
+            # Code for forcing overfitting
+            # if (overfit is True) and (of_batch_exists is True):
+            #     pass
+            # else:
+            #     mel, src, tgt = batch  # (b_sz, s_len), (b_sz, s_len, v_sz)
+            #     of_batch_exists = True
+
             mel, src, tgt = batch  # (b_sz, s_len), (b_sz, s_len, v_sz)
             logits = model(mel, src)  # (b_sz, s_len, v_sz)
             logits = logits.transpose(1, 2)  # Transpose for CrossEntropyLoss
@@ -442,7 +461,6 @@ def _train(
             )
 
     for epoch in range(start_epoch, epochs + start_epoch):
-        train_dataloader.dataset.init_epoch(epoch)
         avg_train_loss = train_loop(dataloader=train_dataloader, _epoch=epoch)
         avg_val_loss = val_loop(dataloader=val_dataloader, _epoch=epoch)
         if accelerator.is_main_process:

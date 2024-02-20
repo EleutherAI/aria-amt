@@ -93,7 +93,21 @@ class MultiHeadAttention(nn.Module):
             k = kv_cache[self.key]
             v = kv_cache[self.value]
 
+        # Use flash attention here !!
+        # https://pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html
+        # debug = True
+        # if debug is True:
+        #     print(f"q shape: {q.shape}")
+        #     print(f"k shape: {k.shape}")
+        #     print(f"v shape: {v.shape}")
+        #     print(f"mask shape: {mask.shape}")
+
         wv, qk = self.qkv_attention(q, k, v, mask)
+
+        # if debug is True:
+        #     print(f"att_out shape: {wv.shape}")
+        #     print(f"att_weights shape: {qk.shape}")
+
         return self.out(wv), qk
 
     def qkv_attention(
@@ -180,7 +194,7 @@ class AudioEncoder(nn.Module):
 
         assert (
             x.shape[1:] == self.positional_embedding.shape
-        ), "incorrect audio shape"
+        ), f"incorrect audio shape: {x.shape[1:]} != {self.positional_embedding.shape}"
         x = (x + self.positional_embedding).to(x.dtype)
 
         for block in self.blocks:
@@ -281,7 +295,8 @@ class AmtEncoderDecoder(nn.Module):
         return self.decoder(tokens, audio_features)
 
     def forward(self, mel: torch.Tensor, tokens: torch.Tensor) -> torch.Tensor:
-        return self.decoder(tokens, self.encoder(mel))
+        _buff = self.encoder(mel)
+        return self.decoder(tokens, _buff)
 
     @property
     def device(self):

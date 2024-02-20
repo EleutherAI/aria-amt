@@ -29,8 +29,8 @@ def _parse_transcribe_args():
     argp = argparse.ArgumentParser(prog="amt transcribe")
     argp.add_argument("model_name", help="name of model config file")
     argp.add_argument("cp", help="checkpoint path")
-    argp.add_argument("load_path", help="wav file load path")
-    argp.add_argument("save_path", help="midi file save path")
+    argp.add_argument("-load_path", help="wav file load path", required=True)
+    argp.add_argument("-save_path", help="midi file save path", required=True)
 
     return argp.parse_args(sys.argv[2:])
 
@@ -120,7 +120,11 @@ def transcribe(args):
     model_state = _load_weight(ckpt_path=args.cp, device=device)
     model.load_state_dict(model_state)
 
-    mid_dict = greedy_sample(model=model, audio_path=args.load_path)
+    mid_dict = greedy_sample(
+        model=model,
+        audio_path=args.load_path,
+        device=device,
+    )
     mid = mid_dict.to_midi()
     mid.save(args.save_path)
 
