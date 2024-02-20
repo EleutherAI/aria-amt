@@ -11,6 +11,8 @@ logging.basicConfig(level=logging.INFO)
 if os.path.isdir("tests/test_results") is False:
     os.mkdir("tests/test_results")
 
+MAESTRO_PATH = "/weka/proj-aria/aria-amt/data/maestro/val.jsonl"
+
 
 # Need to test this properly, have issues turning mel_spec back into audio
 class TestDataGen(unittest.TestCase):
@@ -42,6 +44,14 @@ class TestAmtDataset(unittest.TestCase):
                 src_decoded, len_ms=30000
             ).to_midi()
             mid.save(f"tests/test_results/trunc_{idx}.mid")
+
+    def test_read(self):
+        if not os.path.isfile(MAESTRO_PATH):
+            return
+        tokenizer = AmtTokenizer()
+        dataset = AmtDataset(load_path=MAESTRO_PATH)
+        for mel, src, tgt in dataset:
+            pass
 
 
 if __name__ == "__main__":

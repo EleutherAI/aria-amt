@@ -76,7 +76,7 @@ class TestAmtTokenizer(unittest.TestCase):
                 ),
             )
 
-            if idx == 0:
+            if idx == 0 or idx == 1:
                 logging.info(
                     f"msg mixup: {tokenized_seq} ->\n{aug_tokenized_seq}"
                 )

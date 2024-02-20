@@ -2,15 +2,14 @@ import os
 import random
 import torch
 
+from tqdm import tqdm
+
 from amt.model import AmtEncoderDecoder
 from amt.tokenizer import AmtTokenizer
 from amt.data import get_features
 from amt.config import load_config
 from aria.data.midi import MidiDict
 
-config = load_config()
-MAX_SEQ_LEN = config["data"]["max_seq_len"]
-LEN_MS = 30000  # This should not be hardcoded
 
 # TODO: Implement this with KV-caching, see the whisper inference file
 
@@ -18,16 +17,11 @@ LEN_MS = 30000  # This should not be hardcoded
 def greedy_sample(
     model: AmtEncoderDecoder,
     audio_path: str,
-    temp: float,  # Needed?
-    top_p: float,  # Needed?
+    device: str,
 ):
-    # 1. Get audio features
-    # 2. For each audio features, do greedy decoding starting each new segment
-    #    with the prev tokens set correctly previously
-    # 3. Add the results to one buffer sequence, with onsets potentially out of
-    #    range, this should not be an issue the way that detokenize_midi_dict
-    #    is currently implemented
-    # 4.
+    LEN_MS = 30000  # This should not be hardcoded
+    MAX_SEQ_LEN = model.dims.n_text_ctx
+
     def _process_segment(
         audio_seg: torch.tensor,
         prefix: list,
@@ -36,35 +30,56 @@ def greedy_sample(
     ):
         start_idx = len(prefix)
         pad_id = tokenizer.pad_id
+        eos_id = tokenizer.tok_to_id[tokenizer.eos_tok]
+        audio_seg = audio_seg.unsqueeze(0).to(device)
         seq = tokenizer.encode(tokenizer.trunc_seq(prefix, MAX_SEQ_LEN))
+        seq = torch.tensor(seq).unsqueeze(0).to(device)
 
-        for idx in range(start_idx, MAX_SEQ_LEN - 1):
-            logits = model.forward(mel=audio_seg, tokens=seq)
-            next_tok_id = logits[idx, :].argmax()
+        for idx in (
+            pbar := tqdm(
+                range(start_idx, MAX_SEQ_LEN - 1),
+                total=MAX_SEQ_LEN - (start_idx + 1),
+                leave=False,
+            )
+        ):
+            logits = model.forward(mel=audio_seg, tokens=seq[:, :idx])
+            probs = torch.softmax(logits[0, -1], dim=-1)
+            next_tok_id = torch.multinomial(probs / 0.001, num_samples=1)
 
-            if next_tok_id == pad_id:
+            # Debug logging:
+            # print(f"input seq shape: {seq[:, :idx].shape}")
+            # print(f"logits shape: {logits.shape}")
+            # print(f"probs shape: {probs.shape}")
+            # print(int(next_tok_id), tokenizer.id_to_tok[int(next_tok_id)])
+
+            if next_tok_id == pad_id or next_tok_id == eos_id:
                 break
             else:
-                seq[idx + 1] = next_tok_id
+                seq[0, idx] = next_tok_id
 
-        if idx == MAX_SEQ_LEN - 1:
+        if idx == MAX_SEQ_LEN - 2:
             print("WARNING: Ran out of context when generating sequence")
 
-        seq = tokenizer.decode(seq)
+        seq = tokenizer.decode(seq[0, :])
         _, unclosed_notes = tokenizer._detokenize_midi_dict(
-            tokenized_seq=seq, len_ms=LEN_MS
+            tokenized_seq=seq,
+            len_ms=LEN_MS,
+            return_unclosed_notes=True,
         )
 
         return seq, unclosed_notes
 
-    tokenizer = AmtTokenizer()
     audio_segments = [f for f, _ in get_features(audio_path=audio_path)]
+    print(f"{len(audio_segments)} audio segments to process...")
+
+    model.to(device)
+    model.eval()
+    tokenizer = AmtTokenizer()
     _unclosed_notes = []
     concat_seq = []
     _onset_adj = 0
     for idx, _audio_seg in enumerate(audio_segments):
-        _seq = [("prev", k) for k, _ in _unclosed_notes.items()]
-        random.shuffle(_seq)
+        _seq = [("prev", p) for p in _unclosed_notes] + [tokenizer.bos_tok]
 
         _seq, _unclosed_notes = _process_segment(
             audio_seg=_audio_seg,
@@ -72,6 +87,14 @@ def greedy_sample(
             model=model,
             tokenizer=tokenizer,
         )
+        random.shuffle(_unclosed_notes)
+
+        # DEBUG
+        __midi_dict = tokenizer._detokenize_midi_dict(_seq, 30000)
+        __midi = __midi_dict.to_midi()
+        __midi.save(f"/weka/proj-aria/aria-amt/samples/res{idx}.mid")
+
+        print(f"Done {idx}/{len(audio_segments)}:\n{_seq}")
 
         for tok in _seq:
             if type(tok) is tuple and tok[0] == "onset":

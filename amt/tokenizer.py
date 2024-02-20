@@ -16,8 +16,7 @@ from amt.config import load_config
 # Instead of doing this, we could calculate beams at inference time, selecting
 # the note with the first onset so that we don't miss notes.
 
-# TODO: Need to add start token so that we have an entry point for doing next
-# token prediction
+# TODO: Move start token to after prev tokens? Instead of at the very start
 
 
 class AmtTokenizer(Tokenizer):
@@ -161,7 +160,6 @@ class AmtTokenizer(Tokenizer):
         tokenized_seq = []
         note_status = {}
         for pitch in prev_notes:
-            tokenized_seq.append(("prev", pitch))
             note_status[pitch] = True
         for note in on_off_notes:
             _type, _pitch, _onset, _velocity = note
@@ -184,7 +182,8 @@ class AmtTokenizer(Tokenizer):
                     tokenized_seq.append(("onset", _onset))
                     note_status[_pitch] = False
 
-        return [self.bos_tok] + tokenized_seq
+        prefix = [("prev", p) for p in prev_notes]
+        return prefix + [self.bos_tok] + tokenized_seq + [self.eos_tok]
 
     def _detokenize_midi_dict(
         self,
@@ -197,8 +196,10 @@ class AmtTokenizer(Tokenizer):
         TICKS_PER_BEAT = 500
         TEMPO = 500000
 
-        if tokenized_seq[0] == self.bos_tok:
-            tokenized_seq = tokenized_seq[1:]
+        # if tokenized_seq[0] == self.bos_tok:
+        #     tokenized_seq = tokenized_seq[1:]
+        if self.eos_tok in tokenized_seq:
+            tokenized_seq = tokenized_seq[: tokenized_seq.index(self.eos_tok)]
         if self.pad_tok in tokenized_seq:
             tokenized_seq = tokenized_seq[: tokenized_seq.index(self.pad_tok)]
 
@@ -215,12 +216,21 @@ class AmtTokenizer(Tokenizer):
             }
         ]
 
-        # Process notes
+        # Process prev tokens
         notes_to_close = {}
+        for idx, tok in enumerate(tokenized_seq):
+            if tok == self.bos_tok:
+                break
+            elif type(tok) == tuple and tok[0] == "prev":
+                notes_to_close[tok[1]] = (0, self.default_velocity)
+            else:
+                raise Exception(f"Invalid note sequence: {tokenized_seq[:idx]}")
+
+        # Process notes
         for tok_1, tok_2, tok_3 in zip(
-            tokenized_seq[:],
-            tokenized_seq[1:],
-            tokenized_seq[2:] + [(None, None)],
+            tokenized_seq[idx + 1 :],
+            tokenized_seq[idx + 2 :],
+            tokenized_seq[idx + 3 :] + [(None, None)],
         ):
             tok_1_type, tok_1_data = tok_1
             tok_2_type, tok_2_data = tok_2
@@ -228,6 +238,7 @@ class AmtTokenizer(Tokenizer):
 
             if tok_1_type == "prev":
                 notes_to_close[tok_1_data] = (0, self.default_velocity)
+                print("Unexpected token order: 'prev' seen after '<S>'")
             elif tok_1_type == "on":
                 if (tok_2_type, tok_3_type) != ("onset", "vel"):
                     print("Unexpected token order")
@@ -291,7 +302,7 @@ class AmtTokenizer(Tokenizer):
         )
 
         if return_unclosed_notes is True:
-            return midi_dict, notes_to_close
+            return midi_dict, [p for p, _ in notes_to_close.items()]
         else:
             return midi_dict
 
@@ -306,28 +317,38 @@ class AmtTokenizer(Tokenizer):
 
     def export_msg_mixup(self):
         def msg_mixup(src: list):
+            # Process bos, eos, and pad tokens
             orig_len = len(src)
             seen_pad_tok = False
-
-            if src[0] == self.bos_tok:
-                src = src[1:]
+            seen_eos_tok = False
+            if self.pad_tok in src:
+                seen_pad_tok = True
+            if self.eos_tok in src:
+                src = src[: src.index(self.eos_tok)]
+                seen_eos_tok = True
 
             # Reorder prev tokens
             res = []
             idx = 0
             for idx, tok in enumerate(src):
-                tok_type, tok_data = tok
-                if tok_type != "prev":
+                if tok == self.bos_tok:
                     break
-                else:
+                elif type(tok) == tuple and tok[0] != "prev":
+                    print("Missing BOS token when processing prefix")
+                    break
+                elif type(tok) == tuple and tok[0] == "prev":
                     res.append(tok)
+                else:
+                    print(f"Unexpected token when processing prefix: {tok}")
 
             random.shuffle(res)  # Only includes prev toks
+            res.append(self.bos_tok)  # Beggining of sequence
+
             buffer = defaultdict(lambda: defaultdict(list))
             for tok_1, tok_2, tok_3 in zip(
-                src[idx:],
                 src[idx + 1 :],
-                src[idx + 2 :] + [(None, None)],
+                src[idx + 2 :],
+                src[idx + 3 :] + [(None, None)],
             ):
                 if tok_2 == self.pad_tok:
                     seen_pad_tok = True
@@ -335,6 +356,7 @@ class AmtTokenizer(Tokenizer):
 
                 tok_1_type, tok_1_data = tok_1
                 tok_2_type, tok_2_data = tok_2
+
                 if tok_1_type == "on":
                     _onset = tok_2_data
                     buffer[_onset]["on"].append((tok_1, tok_2, tok_3))
@@ -356,7 +378,8 @@ class AmtTokenizer(Tokenizer):
                     res.append(item[1])  # Onset
                     res.append(item[2])  # Velocity
 
-            res = [self.bos_tok] + res
+            if seen_eos_tok is True:
+                res += [self.eos_tok]
             if seen_pad_tok is True:
                 return self.trunc_seq(res, orig_len)
             else:

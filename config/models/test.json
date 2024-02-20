@@ -1,10 +1,10 @@
 {
     "n_mels": 80,
-    "n_audio_ctx": 3000,
+    "n_audio_ctx": 1500,
     "n_audio_state": 64,
     "n_audio_head": 4,
     "n_audio_layer": 4,
-    "n_text_ctx": 2048,
+    "n_text_ctx": 4096,
     "n_text_state": 64,
     "n_text_head": 4,
     "n_text_layer": 4
