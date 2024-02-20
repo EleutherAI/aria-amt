@@ -20,18 +20,24 @@ config = load_config()["data"]
 STRIDE_FACTOR = config["stride_factor"]
 
 
-def get_features(audio_path: str, mid_path: str):
+def get_features(audio_path: str, mid_path: str | None = None):
     """This function yields tuples of matched log mel spectrograms and
-    tokenized sequences (np.array, list).
+    tokenized sequences (np.array, list). If it is given only an audio path
+    then it will return an empty list for the mid_feature
     """
     tokenizer = AmtTokenizer()
 
-    if not os.path.isfile(audio_path) or not os.path.isfile(mid_path):
+    if not os.path.isfile(audio_path):
+        return None
+    if (mid_path is not None) and (not os.path.isfile(mid_path)):
         return None
 
     try:
-        midi_dict = MidiDict.from_midi(mid_path)
         log_spec = log_mel_spectrogram(audio=audio_path)
+        if mid_path is not None:
+            midi_dict = MidiDict.from_midi(mid_path)
+        else:
+            midi_dict = None
     except Exception as e:
         print("Failed to convert files into features")
         return None
@@ -40,11 +46,15 @@ def get_features(audio_path: str, mid_path: str):
     res = []
     for start_frame in range(0, total_frames, N_FRAMES // STRIDE_FACTOR):
         audio_feature = pad_or_trim(log_spec[:, start_frame:], length=N_FRAMES)
-        mid_feature = tokenizer._tokenize_midi_dict(
-            midi_dict=midi_dict,
-            start_ms=start_frame * 10,
-            end_ms=(start_frame + N_FRAMES) * 10,
-        )
+        if midi_dict:
+            mid_feature = tokenizer._tokenize_midi_dict(
+                midi_dict=midi_dict,
+                start_ms=start_frame * 10,
+                end_ms=(start_frame + N_FRAMES) * 10,
+            )
+        else:
+            mid_feature = []
+
         res.append((audio_feature, mid_feature))
 
     return res
@@ -52,7 +62,11 @@ def get_features(audio_path: str, mid_path: str):
 
 def get_features_mp(args):
     """Multiprocessing wrapper for get_features"""
-    res = get_features(*args)
+    try:
+        res = get_features(*args)
+    except Exception as e:
+        res = None
+
     if res is None:
         return False, None
     else:
@@ -62,6 +76,7 @@ def get_features_mp(args):
 class AmtDataset(torch.utils.data.Dataset):
     def __init__(self, load_path: str):
         self.tokenizer = AmtTokenizer(return_tensors=True)
+        self.config = load_config()["data"]
         self.aug_fn = self.tokenizer.export_msg_mixup()
         self.file_buff = open(load_path, mode="r")
         self.file_mmap = mmap.mmap(
@@ -91,14 +106,22 @@ class AmtDataset(torch.utils.data.Dataset):
         self.file_mmap.seek(self.index[idx])
 
         # This isn't going to load properly
-        spec, seq = json.loads(self.file_mmap.readline())  # Load data from line
+        spec, _seq = json.loads(
+            self.file_mmap.readline()
+        )  # Load data from line
 
         spec = torch.tensor(spec)  # Format spectrogram into tensor
-        seq = [_format(tok) for tok in seq]  # Format seq
-        seq = self.aug_fn(seq)  # Data augmentation
+        _seq = [_format(tok) for tok in _seq]  # Format seq
+        _seq = self.aug_fn(_seq)  # Data augmentation
 
-        src = seq
-        tgt = seq[1:] + [self.tokenizer.pad_tok]
+        src = self.tokenizer.trunc_seq(
+            seq=_seq,
+            seq_len=self.config["max_seq_len"],
+        )
+        tgt = self.tokenizer.trunc_seq(
+            seq=_seq[1:],
+            seq_len=self.config["max_seq_len"],
+        )
 
         return spec, self.tokenizer.encode(src), self.tokenizer.encode(tgt)
 
@@ -120,20 +143,32 @@ class AmtDataset(torch.utils.data.Dataset):
         cls,
         matched_load_paths: list[tuple[str, str]],
         save_path: str,
-        audio_aug_hook: Callable | None = None,
+        num_processes: int = 4,
     ):
         def _get_features(_matched_load_paths: list):
-            with Pool(4) as pool:
-                results = pool.imap(get_features_mp, _matched_load_paths)
-                num_paths = len(_matched_load_paths)
-                for idx, (success, res) in enumerate(results):
-                    if idx % 50 == 0 and idx != 0:
-                        print(f"Processed audio-mid pairs: {idx}/{num_paths}")
+            num_paths = len(_matched_load_paths)
+            for idx, entry in enumerate(_matched_load_paths):
+                success, res = get_features_mp(entry)
+                if idx % 10 == 0 and idx != 0:
+                    print(f"Processed audio-mid pairs: {idx}/{num_paths}")
+                if success == False:
+                    continue
+                for _audio_feature, _mid_feature in res:
+                    yield _audio_feature.tolist(), _mid_feature
 
-                    if success == False:
-                        continue
-                    for _audio_feature, _mid_feature in res:
-                        yield _audio_feature.tolist(), _mid_feature
+            # MP CODE DOESN'T WORK FOR SOME REASON !!
+
+            # with Pool(num_processes) as pool:
+            #     results = pool.imap(get_features_mp, _matched_load_paths)
+            #     num_paths = len(_matched_load_paths)
+            #     for idx, (success, res) in enumerate(results):
+            #         if idx % 10 == 0 and idx != 0:
+            #             print(f"Processed audio-mid pairs: {idx}/{num_paths}")
+
+            #         if success == False:
+            #             continue
+            #         for _audio_feature, _mid_feature in res:
+            #             yield _audio_feature.tolist(), _mid_feature
 
         with jsonlines.open(save_path, mode="w") as writer:
             for audio_feature, mid_feature in _get_features(matched_load_paths):

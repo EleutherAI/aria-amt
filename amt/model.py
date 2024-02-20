@@ -8,19 +8,25 @@ from torch import Tensor, nn
 from dataclasses import dataclass
 from typing import Dict, Iterable, Optional
 
+# TODO:
+# Go through and make this more efficient using flash attention ect...
+
 
 @dataclass
-class ModelDimensions:
+class ModelConfig:
     n_mels: int
     n_audio_ctx: int
     n_audio_state: int
     n_audio_head: int
     n_audio_layer: int
-    n_vocab: int
     n_text_ctx: int
     n_text_state: int
     n_text_head: int
     n_text_layer: int
+    n_vocab: Optional[int] = None
+
+    def set_vocab_size(self, vocab_size: int):
+        self.n_vocab = vocab_size
 
 
 class LayerNorm(nn.LayerNorm):
@@ -87,7 +93,21 @@ class MultiHeadAttention(nn.Module):
             k = kv_cache[self.key]
             v = kv_cache[self.value]
 
+        # Use flash attention here !!
+        # https://pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html
+        # debug = True
+        # if debug is True:
+        #     print(f"q shape: {q.shape}")
+        #     print(f"k shape: {k.shape}")
+        #     print(f"v shape: {v.shape}")
+        #     print(f"mask shape: {mask.shape}")
+
         wv, qk = self.qkv_attention(q, k, v, mask)
+
+        # if debug is True:
+        #     print(f"att_out shape: {wv.shape}")
+        #     print(f"att_weights shape: {qk.shape}")
+
         return self.out(wv), qk
 
     def qkv_attention(
@@ -174,7 +194,7 @@ class AudioEncoder(nn.Module):
 
         assert (
             x.shape[1:] == self.positional_embedding.shape
-        ), "incorrect audio shape"
+        ), f"incorrect audio shape: {x.shape[1:]} != {self.positional_embedding.shape}"
         x = (x + self.positional_embedding).to(x.dtype)
 
         for block in self.blocks:
@@ -229,8 +249,8 @@ class TextDecoder(nn.Module):
         return logits
 
 
-class Whisper(nn.Module):
-    def __init__(self, dims: ModelDimensions):
+class AmtEncoderDecoder(nn.Module):
+    def __init__(self, dims: ModelConfig):
         super().__init__()
         self.dims = dims
         self.encoder = AudioEncoder(
@@ -274,10 +294,9 @@ class Whisper(nn.Module):
     def logits(self, tokens: torch.Tensor, audio_features: torch.Tensor):
         return self.decoder(tokens, audio_features)
 
-    def forward(
-        self, mel: torch.Tensor, tokens: torch.Tensor
-    ) -> Dict[str, torch.Tensor]:
-        return self.decoder(tokens, self.encoder(mel))
+    def forward(self, mel: torch.Tensor, tokens: torch.Tensor) -> torch.Tensor:
+        _buff = self.encoder(mel)
+        return self.decoder(tokens, _buff)
 
     @property
     def device(self):
