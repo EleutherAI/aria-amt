@@ -79,7 +79,7 @@ def greedy_sample(
     concat_seq = []
     _onset_adj = 0
     for idx, _audio_seg in enumerate(audio_segments):
-        _seq = [("prev", p) for p in _unclosed_notes] + [tokenizer.bos_tok] 
+        _seq = [("prev", p) for p in _unclosed_notes] + [tokenizer.bos_tok]
 
         _seq, _unclosed_notes = _process_segment(
             audio_seg=_audio_seg,
