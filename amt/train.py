@@ -299,7 +299,7 @@ def _train(
         dataloader: DataLoader,
         _epoch: int,
         _resume_step: int = 0,
-        overfit: bool = True,
+        overfit: bool = False,
     ):
         avg_train_loss = 0
         trailing_loss = 0
@@ -326,13 +326,13 @@ def _train(
             step = __step + _resume_step + 1
 
             # Code for forcing overfitting
-            if (overfit is True) and (of_batch_exists is True):
-                pass
-            else:
-                of_batch_exists = True
-                mel, src, tgt = batch  # (b_sz, s_len), (b_sz, s_len, v_sz)
+            # if (overfit is True) and (of_batch_exists is True):
+            #     pass
+            # else:
+            #     of_batch_exists = True
+            #     mel, src, tgt = batch  # (b_sz, s_len), (b_sz, s_len, v_sz)
 
-            # mel, src, tgt = batch  # (b_sz, s_len), (b_sz, s_len, v_sz)
+            mel, src, tgt = batch  # (b_sz, s_len), (b_sz, s_len, v_sz)
             logits = model(mel, src)  # (b_sz, s_len, v_sz)
             logits = logits.transpose(1, 2)  # Transpose for CrossEntropyLoss
             loss = loss_fn(logits, tgt)
