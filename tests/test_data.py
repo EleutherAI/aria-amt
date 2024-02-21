@@ -45,13 +45,26 @@ class TestAmtDataset(unittest.TestCase):
             ).to_midi()
             mid.save(f"tests/test_results/trunc_{idx}.mid")
 
-    def test_read(self):
+    def test_maestro(self):
         if not os.path.isfile(MAESTRO_PATH):
             return
+
         tokenizer = AmtTokenizer()
         dataset = AmtDataset(load_path=MAESTRO_PATH)
-        for mel, src, tgt in dataset:
-            pass
+        for idx, (mel, src, tgt) in enumerate(dataset):
+            src_dec, tgt_dec = tokenizer.decode(src), tokenizer.decode(tgt)
+            if (idx + 1) % 200 == 0:
+                break
+            if idx % 25 == 0:
+                src_mid_dict = tokenizer._detokenize_midi_dict(
+                    src_dec, len_ms=30000
+                )
+                src_mid = src_mid_dict.to_midi()
+                if idx % 10 == 0:
+                    src_mid.save(f"tests/test_results/dataset_{idx}.mid")
+
+            for src_tok, tgt_tok in enumerate(zip(src_dec[1:], tgt_dec)):
+                self.assertEqual(src_tok, tgt_tok)
 
 
 if __name__ == "__main__":

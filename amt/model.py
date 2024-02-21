@@ -68,7 +68,10 @@ def sinusoids(length, channels, max_timescale=10000):
 class MultiHeadAttention(nn.Module):
     def __init__(self, n_state: int, n_head: int):
         super().__init__()
+        assert n_state % n_head == 0, "n_head does not evenly devide n_state"
+
         self.n_head = n_head
+        self.d_head = n_state // n_head
         self.query = Linear(n_state, n_state)
         self.key = Linear(n_state, n_state, bias=False)
         self.value = Linear(n_state, n_state)
@@ -93,20 +96,52 @@ class MultiHeadAttention(nn.Module):
             k = kv_cache[self.key]
             v = kv_cache[self.value]
 
-        # Use flash attention here !!
-        # https://pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html
-        # debug = True
-        # if debug is True:
-        #     print(f"q shape: {q.shape}")
-        #     print(f"k shape: {k.shape}")
-        #     print(f"v shape: {v.shape}")
-        #     print(f"mask shape: {mask.shape}")
+        # Old ---
+        # wv, qk = self.qkv_attention(q, k, v, mask)
+        # End ---
 
-        wv, qk = self.qkv_attention(q, k, v, mask)
+        # New code ------
+        debug = False
+        # Reshape and transpose for attention calculation
+        batch_size, target_seq_len, _ = q.shape
+        batch_size, source_seq_len, _ = k.shape
+        q = q.view(batch_size, target_seq_len, self.n_head, self.d_head)
+        k = k.view(batch_size, source_seq_len, self.n_head, self.d_head)
+        v = v.view(batch_size, source_seq_len, self.n_head, self.d_head)
 
-        # if debug is True:
-        #     print(f"att_out shape: {wv.shape}")
-        #     print(f"att_weights shape: {qk.shape}")
+        # (bz, L, nh, dh) -> (bz, nh, L, dh)
+        q, k, v = map(lambda t: t.transpose(1, 2), (q, k, v))
+
+        if debug is True:
+            print(f"q shape: {q.shape}")
+            print(f"k shape: {k.shape}")
+            print(f"v shape: {v.shape}")
+            if mask is not None:
+                print(f"mask shape: {mask.shape}")
+
+        if mask == None:
+            _is_causal = False
+        else:
+            _is_causal = True
+
+        qk = None  # Only used during kv-caching?
+        wv = F.scaled_dot_product_attention(
+            query=q,
+            key=k,
+            value=v,
+            is_causal=_is_causal,
+        )
+
+        # (bz, nh, L, dh) -> (bz, L, nh, dh) -> (bz, L, d)
+        wv = wv.transpose(1, 2)
+        wv = wv.view(batch_size, target_seq_len, self.n_head * self.d_head)
+
+        if debug is True:
+            print(f"att_out shape: {wv.shape}")
+            if qk is not None:
+                print(f"att_weights shape: {qk.shape}")
+
+        # End new code ------
 
         return self.out(wv), qk
 

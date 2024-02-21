@@ -299,7 +299,7 @@ def _train(
         dataloader: DataLoader,
         _epoch: int,
         _resume_step: int = 0,
-        overfit: bool = False,
+        overfit: bool = True,
     ):
         avg_train_loss = 0
         trailing_loss = 0
@@ -326,13 +326,13 @@ def _train(
             step = __step + _resume_step + 1
 
             # Code for forcing overfitting
-            # if (overfit is True) and (of_batch_exists is True):
-            #     pass
-            # else:
-            #     mel, src, tgt = batch  # (b_sz, s_len), (b_sz, s_len, v_sz)
-            #     of_batch_exists = True
+            if (overfit is True) and (of_batch_exists is True):
+                pass
+            else:
+                of_batch_exists = True
+                mel, src, tgt = batch  # (b_sz, s_len), (b_sz, s_len, v_sz)
 
-            mel, src, tgt = batch  # (b_sz, s_len), (b_sz, s_len, v_sz)
+            # mel, src, tgt = batch  # (b_sz, s_len), (b_sz, s_len, v_sz)
             logits = model(mel, src)  # (b_sz, s_len, v_sz)
             logits = logits.transpose(1, 2)  # Transpose for CrossEntropyLoss
             loss = loss_fn(logits, tgt)
@@ -651,6 +651,8 @@ def train(
     model_config = ModelConfig(**load_model_config(model_name))
     model_config.set_vocab_size(tokenizer.vocab_size)
     model = AmtEncoderDecoder(model_config)
+    # logger.info("Compiling model...")
+    # model = torch.compile(model)
     logger.info(f"Loaded model with config: {load_model_config(model_name)}")
     if mode == "finetune":
         try:
