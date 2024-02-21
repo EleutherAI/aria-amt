@@ -29,7 +29,10 @@ def get_features(audio_path: str, mid_path: str | None = None):
 
     if not os.path.isfile(audio_path):
         return None
-    if (mid_path is not None) and (not os.path.isfile(mid_path)):
+
+    if mid_path is not None:
+        pass
+    elif not os.path.isfile(mid_path):
         return None
 
     try:
@@ -40,7 +43,7 @@ def get_features(audio_path: str, mid_path: str | None = None):
             midi_dict = None
     except Exception as e:
         print("Failed to convert files into features")
-        return None
+        raise e
 
     _, total_frames = log_spec.shape
     res = []
@@ -62,10 +65,7 @@ def get_features(audio_path: str, mid_path: str | None = None):
 
 def get_features_mp(args):
     """Multiprocessing wrapper for get_features"""
-    try:
-        res = get_features(*args)
-    except Exception as e:
-        res = None
+    res = get_features(*args)
 
     if res is None:
         return False, None

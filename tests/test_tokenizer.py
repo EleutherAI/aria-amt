@@ -3,6 +3,7 @@ import logging
 import os
 
 from amt.tokenizer import AmtTokenizer
+from aria.tokenizer import AbsTokenizer
 from aria.data.midi import MidiDict
 
 logging.basicConfig(level=logging.INFO)
@@ -13,8 +14,8 @@ if os.path.isdir("tests/test_results") is False:
 class TestAmtTokenizer(unittest.TestCase):
     def test_tokenize(self):
         def _tokenize_detokenize(mid_name: str):
-            START = 5000
-            END = 10000
+            START = 0
+            END = 30000
 
             tokenizer = AmtTokenizer()
             midi_dict = MidiDict.from_midi(f"tests/test_data/{mid_name}")
@@ -38,6 +39,9 @@ class TestAmtTokenizer(unittest.TestCase):
         _tokenize_detokenize(mid_name="basic.mid")
         _tokenize_detokenize(mid_name="147.mid")
         _tokenize_detokenize(mid_name="beethoven_moonlight.mid")
+        _tokenize_detokenize(mid_name="maestro1.mid")
+        _tokenize_detokenize(mid_name="maestro2.mid")
+        _tokenize_detokenize(mid_name="maestro3.mid")
 
     def test_aug(self):
         def aug(_midi_dict: MidiDict, _start_ms: int, _end_ms: int):

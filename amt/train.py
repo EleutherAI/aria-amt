@@ -329,8 +329,8 @@ def _train(
             # if (overfit is True) and (of_batch_exists is True):
             #     pass
             # else:
-            #     mel, src, tgt = batch  # (b_sz, s_len), (b_sz, s_len, v_sz)
             #     of_batch_exists = True
+            #     mel, src, tgt = batch  # (b_sz, s_len), (b_sz, s_len, v_sz)
 
             mel, src, tgt = batch  # (b_sz, s_len), (b_sz, s_len, v_sz)
             logits = model(mel, src)  # (b_sz, s_len, v_sz)
@@ -651,6 +651,8 @@ def train(
     model_config = ModelConfig(**load_model_config(model_name))
     model_config.set_vocab_size(tokenizer.vocab_size)
     model = AmtEncoderDecoder(model_config)
+    # logger.info("Compiling model...")
+    # model = torch.compile(model)
     logger.info(f"Loaded model with config: {load_model_config(model_name)}")
     if mode == "finetune":
         try:
