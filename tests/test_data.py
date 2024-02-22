@@ -55,15 +55,19 @@ class TestAmtDataset(unittest.TestCase):
             src_dec, tgt_dec = tokenizer.decode(src), tokenizer.decode(tgt)
             if (idx + 1) % 200 == 0:
                 break
-            if idx % 25 == 0:
+            if idx % 7 == 0:
                 src_mid_dict = tokenizer._detokenize_midi_dict(
-                    src_dec, len_ms=30000
+                    src_dec,
+                    len_ms=30000,
                 )
+
                 src_mid = src_mid_dict.to_midi()
                 if idx % 10 == 0:
                     src_mid.save(f"tests/test_results/dataset_{idx}.mid")
 
-            for src_tok, tgt_tok in enumerate(zip(src_dec[1:], tgt_dec)):
+            self.assertTrue(tokenizer.unk_tok not in src_dec)
+            self.assertTrue(tokenizer.unk_tok not in tgt_dec)
+            for src_tok, tgt_tok in zip(src_dec[1:], tgt_dec):
                 self.assertEqual(src_tok, tgt_tok)
 
 

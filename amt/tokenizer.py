@@ -81,31 +81,18 @@ class AmtTokenizer(Tokenizer):
         start_ms: int,
         end_ms: int,
     ):
-
         assert (
             end_ms - start_ms <= self.max_onset
         ), "Invalid values for start_ms, end_ms"
 
-        channel_to_pedal_intervals = self._build_pedal_intervals(midi_dict)
-        on_off_notes = defaultdict(
-            list
-        )  #  pitch: [(onset, offset, velocity), ...]
+        midi_dict.resolve_pedal()  # Important !!
+        on_off_notes = []
+        prev_notes = []
         for msg in midi_dict.note_msgs:
-            _channel = msg["channel"]
             _pitch = msg["data"]["pitch"]
             _velocity = msg["data"]["velocity"]
             _start_tick = msg["data"]["start"]
             _end_tick = msg["data"]["end"]
-
-            # Update end tick if affected by pedal
-            for pedal_interval in channel_to_pedal_intervals[_channel]:
-                pedal_start, pedal_end = (
-                    pedal_interval[0],
-                    pedal_interval[1],
-                )
-                if pedal_start < _end_tick < pedal_end:
-                    _end_tick = pedal_end
-                    break
 
             note_start_ms = get_duration_ms(
                 start_tick=0,
@@ -128,68 +115,60 @@ class AmtTokenizer(Tokenizer):
             if note_end_ms <= start_ms or note_start_ms >= end_ms:  # Skip
                 continue
             elif (
-                note_start_ms < start_ms  # and _pitch not in _prev_notes
+                note_start_ms < start_ms and _pitch not in prev_notes
             ):  # Add to prev notes
-                if note_end_ms >= end_ms:
-                    # We do this so we can detect it later (don't add off tok)
-                    rel_note_end_ms_q += 1
-                on_off_notes[_pitch].append(
-                    (-1, rel_note_end_ms_q, self.default_velocity)
-                )
+                prev_notes.append(_pitch)
+                if note_end_ms < end_ms:
+                    on_off_notes.append(
+                        ("off", _pitch, rel_note_end_ms_q, None)
+                    )
             else:  # Add to on_off_msgs
                 # Skip notes with no duration or duplicate notes
                 if rel_note_start_ms_q == rel_note_end_ms_q:
                     continue
-                elif rel_note_start_ms_q in [
-                    t[0] for t in on_off_notes[_pitch]
-                ]:
+                if (
+                    "on",
+                    _pitch,
+                    rel_note_start_ms_q,
+                    velocity_q,
+                ) in on_off_notes:
                     continue
-
-                if note_end_ms >= end_ms:
-                    # Same idea as before
-                    rel_note_end_ms_q += 1
-
-                on_off_notes[_pitch].append(
-                    (rel_note_start_ms_q, rel_note_end_ms_q, velocity_q)
+                on_off_notes.append(
+                    ("on", _pitch, rel_note_start_ms_q, velocity_q)
                 )
+                if note_end_ms < end_ms:
+                    on_off_notes.append(
+                        ("off", _pitch, rel_note_end_ms_q, None)
+                    )
 
-        # Resolve note overlaps
-        for k, v in on_off_notes.items():
-            if k == 64:
-                pass
-            v.sort(key=lambda x: x[0])
-            on_ms_buff, off_ms_buff, vel_buff = -3, -2, 0
-            for idx, (on_ms, off_ms, vel) in enumerate(v):
-                if off_ms_buff > on_ms:
-                    # Adjust previous off so that it doesn't interupt
-                    v[idx - 1] = (on_ms_buff, on_ms, vel_buff)
-                on_ms_buff, off_ms_buff, vel_buff = on_ms, off_ms, vel
+        on_off_notes.sort(key=lambda x: (x[2], x[0] == "on"))
+        random.shuffle(prev_notes)
 
-        _note_msgs = []
-        for k, v in on_off_notes.items():
-            for on_ms, off_ms, vel in v:
-                _note_msgs.append(("on", k, on_ms, vel))
-
-                if off_ms <= self.max_onset:
-                    _note_msgs.append(("off", k, off_ms, None))
-
-        _note_msgs.sort(key=lambda x: (x[2], x[0] == "on"))  # Check
         tokenized_seq = []
-        prefix = []
-        for note in _note_msgs:
+        note_status = {}
+        for pitch in prev_notes:
+            note_status[pitch] = True
+        for note in on_off_notes:
             _type, _pitch, _onset, _velocity = note
             if _type == "on":
-                if _onset < 0:
-                    prefix.append(("prev", _pitch))
-                else:
-                    tokenized_seq.append(("on", _pitch))
-                    tokenized_seq.append(("onset", _onset))
-                    tokenized_seq.append(("vel", _velocity))
-            elif _type == "off":
-                tokenized_seq.append(("off", _pitch))
-                tokenized_seq.append(("onset", _onset))
+                if note_status.get(_pitch) == True:
+                    # Place holder - we can remove note_status logic now
+                    raise Exception
 
-        random.shuffle(prefix)
+                tokenized_seq.append(("on", _pitch))
+                tokenized_seq.append(("onset", _onset))
+                tokenized_seq.append(("vel", _velocity))
+                note_status[_pitch] = True
+            elif _type == "off":
+                if note_status.get(_pitch) == False:
+                    # Place holder - we can remove note_status logic now
+                    raise Exception
+                else:
+                    tokenized_seq.append(("off", _pitch))
+                    tokenized_seq.append(("onset", _onset))
+                    note_status[_pitch] = False
+
+        prefix = [("prev", p) for p in prev_notes]
         return prefix + [self.bos_tok] + tokenized_seq + [self.eos_tok]
 
     def _detokenize_midi_dict(
@@ -200,6 +179,7 @@ class AmtTokenizer(Tokenizer):
     ):
         # NOTE: These values chosen so that 1000 ticks = 1000ms, allowing us to
         # skip converting between ticks and ms
+        assert len_ms > 0, "len_ms must be positive"
         TICKS_PER_BEAT = 500
         TEMPO = 500000
 

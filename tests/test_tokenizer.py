@@ -11,37 +11,34 @@ if os.path.isdir("tests/test_results") is False:
     os.mkdir("tests/test_results")
 
 
+# Add test for unk tok
+
+
 class TestAmtTokenizer(unittest.TestCase):
     def test_tokenize(self):
-        def _tokenize_detokenize(mid_name: str):
-            START = 0
-            END = 30000
-
+        def _tokenize_detokenize(mid_name: str, start: int, end: int):
+            length = end - start
             tokenizer = AmtTokenizer()
             midi_dict = MidiDict.from_midi(f"tests/test_data/{mid_name}")
-            tokenized_seq = tokenizer._tokenize_midi_dict(
-                midi_dict=midi_dict,
-                start_ms=START,
-                end_ms=END,
-            )
-            logging.info(f"{mid_name} tokenized:")
-            logging.info(tokenized_seq)
 
-            _midi_dict = tokenizer._detokenize_midi_dict(
-                tokenized_seq, END - START
-            )
+            logging.info(f"tokenizing {mid_name} in range ({start}, {end})...")
+            tokenized_seq = tokenizer._tokenize_midi_dict(midi_dict, start, end)
+            tokenized_seq = tokenizer.decode(tokenizer.encode(tokenized_seq))
+            self.assertTrue(tokenizer.unk_tok not in tokenized_seq)
+            _midi_dict = tokenizer._detokenize_midi_dict(tokenized_seq, length)
             _mid = _midi_dict.to_midi()
-            _mid.save(f"tests/test_results/{mid_name}")
-            logging.info(f"{mid_name} note_msgs:")
-            for msg in _midi_dict.note_msgs:
-                logging.info(msg)
+            _mid.save(f"tests/test_results/{start}_{end}_{mid_name}")
 
-        _tokenize_detokenize(mid_name="basic.mid")
-        _tokenize_detokenize(mid_name="147.mid")
-        _tokenize_detokenize(mid_name="beethoven_moonlight.mid")
-        _tokenize_detokenize(mid_name="maestro1.mid")
-        _tokenize_detokenize(mid_name="maestro2.mid")
-        _tokenize_detokenize(mid_name="maestro3.mid")
+        _tokenize_detokenize("basic.mid", start=0, end=30000)
+        _tokenize_detokenize("147.mid", start=0, end=30000)
+        _tokenize_detokenize("beethoven_moonlight.mid", start=0, end=30000)
+
+        for _idx in range(5):
+            START = _idx * 25000
+            END = (_idx + 1) * 25000
+            _tokenize_detokenize("maestro1.mid", start=START, end=END)
+            _tokenize_detokenize("maestro2.mid", start=START, end=END)
+            _tokenize_detokenize("maestro3.mid", start=START, end=END)
 
     def test_aug(self):
         def aug(_midi_dict: MidiDict, _start_ms: int, _end_ms: int):
