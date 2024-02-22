@@ -105,10 +105,8 @@ class AmtDataset(torch.utils.data.Dataset):
 
         self.file_mmap.seek(self.index[idx])
 
-        # This isn't going to load properly
-        spec, _seq = json.loads(
-            self.file_mmap.readline()
-        )  # Load data from line
+        # Load data from line
+        spec, _seq = json.loads(self.file_mmap.readline())
 
         spec = torch.tensor(spec)  # Format spectrogram into tensor
         _seq = [_format(tok) for tok in _seq]  # Format seq
