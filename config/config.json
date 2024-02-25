@@ -16,7 +16,7 @@
         "chunk_len": 30
     },
     "data": {
-        "stride_factor": 1,
+        "stride_factor": 3,
         "max_seq_len": 4096
     }
 } 

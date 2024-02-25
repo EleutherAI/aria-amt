@@ -1,5 +1,6 @@
 import mmap
 import os
+import logging
 import json
 import jsonlines
 import torch
@@ -20,7 +21,27 @@ config = load_config()["data"]
 STRIDE_FACTOR = config["stride_factor"]
 
 
-def get_features(audio_path: str, mid_path: str | None = None):
+def setup_logger():
+    # Get logger and reset all handlers
+    logger = logging.getLogger(__name__)
+    for h in logger.handlers[:]:
+        logger.removeHandler(h)
+
+    logger.propagate = False
+    logger.setLevel(logging.INFO)
+    formatter = logging.Formatter(
+        "[%(asctime)s] %(name)s: [%(levelname)s] %(message)s",
+    )
+
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.INFO)
+    ch.setFormatter(formatter)
+    logger.addHandler(ch)
+
+    return logger
+
+
+def get_features(audio_path: str, mid_path: str = ""):
     """This function yields tuples of matched log mel spectrograms and
     tokenized sequences (np.array, list). If it is given only an audio path
     then it will return an empty list for the mid_feature
@@ -30,14 +51,14 @@ def get_features(audio_path: str, mid_path: str | None = None):
     if not os.path.isfile(audio_path):
         return None
 
-    if mid_path is not None:
+    if mid_path == "":
         pass
     elif not os.path.isfile(mid_path):
         return None
 
     try:
         log_spec = log_mel_spectrogram(audio=audio_path)
-        if mid_path is not None:
+        if mid_path != "":
             midi_dict = MidiDict.from_midi(mid_path)
         else:
             midi_dict = None
@@ -49,7 +70,7 @@ def get_features(audio_path: str, mid_path: str | None = None):
     res = []
     for start_frame in range(0, total_frames, N_FRAMES // STRIDE_FACTOR):
         audio_feature = pad_or_trim(log_spec[:, start_frame:], length=N_FRAMES)
-        if midi_dict:
+        if midi_dict is not None:
             mid_feature = tokenizer._tokenize_midi_dict(
                 midi_dict=midi_dict,
                 start_ms=start_frame * 10,
