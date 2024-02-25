@@ -172,7 +172,7 @@ def get_pretrain_optim(
 ):
     LR = 3e-4
     END_RATIO = 0.1
-    WARMUP_STEPS = 200
+    WARMUP_STEPS = 500
 
     return _get_optim(
         lr=LR,
@@ -210,6 +210,7 @@ def get_dataloaders(
     num_workers: int,
 ):
     logger = get_logger(__name__)
+    logger.info("Indexing datasets...")
     train_dataset = AmtDataset(load_path=train_data_path)
     val_dataset = AmtDataset(load_path=val_data_path)
     logger.info(
@@ -220,7 +221,7 @@ def get_dataloaders(
         train_dataset,
         batch_size=batch_size,
         num_workers=num_workers,
-        shuffle=True,  # Maybe remove
+        shuffle=True,
     )
     val_dataloader = DataLoader(
         val_dataset,

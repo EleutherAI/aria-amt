@@ -13,6 +13,10 @@ from aria.data.midi import MidiDict
 
 # TODO: Implement this with KV-caching, see the whisper inference file
 
+# Due to the autoregressive nature, a good inference algorithm should use some
+# sort of branching to make sure that we don't miss notes, ect... Implement this
+# next week -- Exciting problem (checkout other inference algos)
+
 
 def greedy_sample(
     model: AmtEncoderDecoder,
@@ -43,8 +47,9 @@ def greedy_sample(
             )
         ):
             logits = model.forward(mel=audio_seg, tokens=seq[:, :idx])
-            probs = torch.softmax(logits[0, -1], dim=-1)
-            next_tok_id = torch.multinomial(probs / 0.001, num_samples=1)
+            next_tok_id = torch.argmax(logits[0, -1], dim=-1)
+            # probs = torch.softmax(logits[0, -1], dim=-1)
+            # next_tok_id = torch.argmax(probs, dim=-1)
 
             # Debug logging:
             # print(f"input seq shape: {seq[:, :idx].shape}")

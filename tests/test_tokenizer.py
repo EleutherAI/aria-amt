@@ -56,7 +56,7 @@ class TestAmtTokenizer(unittest.TestCase):
 
         DELTA_MS = 5000
         tokenizer = AmtTokenizer()
-        midi_dict = MidiDict.from_midi("tests/test_data/bach.mid")
+        midi_dict = MidiDict.from_midi("tests/test_data/maestro2.mid")
         __end_ms = midi_dict.note_msgs[-1]["data"]["end"]
 
         for idx, __start_ms in enumerate(range(0, __end_ms, DELTA_MS)):
@@ -86,13 +86,13 @@ class TestAmtTokenizer(unittest.TestCase):
                     tokenized_seq, DELTA_MS
                 )
                 _mid = _midi_dict.to_midi()
-                _mid.save(f"tests/test_results/bach_orig.mid")
+                _mid.save(f"tests/test_results/maestro2_orig.mid")
 
                 _midi_dict = tokenizer._detokenize_midi_dict(
                     aug_tokenized_seq, DELTA_MS
                 )
                 _mid = _midi_dict.to_midi()
-                _mid.save(f"tests/test_results/bach_aug.mid")
+                _mid.save(f"tests/test_results/maestro2_aug.mid")
 
 
 if __name__ == "__main__":
