@@ -17,8 +17,8 @@ from amt.audio import (
     N_FRAMES,
 )
 
-config = load_config()["data"]
-STRIDE_FACTOR = config["stride_factor"]
+config = load_config()
+STRIDE_FACTOR = config["data"]["stride_factor"]
 
 
 def setup_logger():
@@ -47,6 +47,7 @@ def get_features(audio_path: str, mid_path: str = ""):
     then it will return an empty list for the mid_feature
     """
     tokenizer = AmtTokenizer()
+    n_mels = config["audio"]["n_mels"]
 
     if not os.path.isfile(audio_path):
         return None
@@ -57,7 +58,7 @@ def get_features(audio_path: str, mid_path: str = ""):
         return None
 
     try:
-        log_spec = log_mel_spectrogram(audio=audio_path)
+        log_spec = log_mel_spectrogram(audio=audio_path, n_mels=n_mels)
         if mid_path != "":
             midi_dict = MidiDict.from_midi(mid_path)
         else:
@@ -162,11 +163,12 @@ class AmtDataset(torch.utils.data.Dataset):
         cls,
         matched_load_paths: list[tuple[str, str]],
         save_path: str,
-        num_processes: int = 4,
+        num_processes: int = 1,
     ):
         def _get_features(_matched_load_paths: list):
             num_paths = len(_matched_load_paths)
             for idx, entry in enumerate(_matched_load_paths):
+                print(idx)
                 success, res = get_features_mp(entry)
                 if idx % 10 == 0 and idx != 0:
                     print(f"Processed audio-mid pairs: {idx}/{num_paths}")
@@ -175,10 +177,8 @@ class AmtDataset(torch.utils.data.Dataset):
                 for _audio_feature, _mid_feature in res:
                     yield _audio_feature.tolist(), _mid_feature
 
-            # MP CODE DOESN'T WORK FOR SOME REASON !!
-
             # with Pool(num_processes) as pool:
-            #     results = pool.imap(get_features_mp, _matched_load_paths)
+            #     results = pool.imap_unordered(get_features_mp, _matched_load_paths)
             #     num_paths = len(_matched_load_paths)
             #     for idx, (success, res) in enumerate(results):
             #         if idx % 10 == 0 and idx != 0:
@@ -191,4 +191,6 @@ class AmtDataset(torch.utils.data.Dataset):
 
         with jsonlines.open(save_path, mode="w") as writer:
             for audio_feature, mid_feature in _get_features(matched_load_paths):
-                writer.write([audio_feature, mid_feature])
+                # writer.write([audio_feature, mid_feature])
+                print(len(mid_feature))
+                writer.write(mid_feature)
