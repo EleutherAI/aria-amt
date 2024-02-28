@@ -1,15 +1,19 @@
 """Contains code taken from https://github.com/openai/whisper"""
 
 import os
+import random
 import torch
-import numpy as np
+import torchaudio
 import torch.nn.functional as F
+import torchaudio.functional as AF
+import numpy as np
 
 from functools import lru_cache
 from subprocess import CalledProcessError, run
 from typing import Optional, Union
 
 from amt.config import load_config
+from amt.tokenizer import AmtTokenizer
 
 # hard-coded audio hyperparameters
 config = load_config()["audio"]
@@ -176,3 +180,197 @@ def log_mel_spectrogram(
     log_spec = (log_spec + 4.0) / 4.0
 
     return log_spec
+
+
+class AudioTransform(torch.nn.Module):
+    def __init__(
+        self,
+        reverb_factor: int = 1,
+        min_snr: int = 10,
+        max_snr: int = 40,
+        max_pitch_shift: int = 4,
+    ):
+        super().__init__()
+        self.tokenizer = AmtTokenizer()
+        self.reverb_factor = reverb_factor
+        self.min_snr = min_snr
+        self.max_snr = max_snr
+        self.max_pitch_shift = max_pitch_shift
+
+        self.config = load_config()["audio"]
+        self.sample_rate = self.config["sample_rate"]
+        self.chunk_len = self.config["chunk_len"]
+        self.num_samples = self.sample_rate * self.chunk_len
+
+        # Audio aug
+        impulse_paths = self._get_paths(
+            os.path.join(os.path.dirname(__file__), "assets", "impulse")
+        )
+        noise_paths = self._get_paths(
+            os.path.join(os.path.dirname(__file__), "assets", "noise")
+        )
+
+        # Register impulses and noises as buffers
+        self.num_impulse = 0
+        for i, impulse in enumerate(self._get_impulses(impulse_paths)):
+            self.register_buffer(f"impulse_{i}", impulse)
+            self.num_impulse += 1
+
+        self.num_noise = 0
+        for i, noise in enumerate(self._get_noise(noise_paths)):
+            self.register_buffer(f"noise_{i}", noise)
+            self.num_noise += 1
+
+        # Mel-spec
+        self.melspec_transform = torchaudio.transforms.MelSpectrogram(
+            sample_rate=self.sample_rate,
+            n_fft=self.config["n_fft"],
+            hop_length=self.config["hop_len"],
+            n_mels=self.config["n_mels"],
+        )
+
+        # Spec aug
+        self.spec_aug = torch.nn.Sequential(
+            torchaudio.transforms.FrequencyMasking(
+                freq_mask_param=10, iid_masks=True
+            ),
+            torchaudio.transforms.TimeMasking(
+                time_mask_param=100, iid_masks=True
+            ),
+        )
+
+    def _get_paths(self, dir_path):
+        return [
+            os.path.join(dir_path, f)
+            for f in os.listdir(dir_path)
+            if os.path.isfile(os.path.join(dir_path, f))
+        ]
+
+    def _get_impulses(self, impulse_paths: list):
+        impulses = [torchaudio.load(path) for path in impulse_paths]
+        impulses = [
+            AF.resample(
+                waveform=wav, orig_freq=sr, new_freq=config["sample_rate"]
+            ).mean(0, keepdim=True)[:, : 5 * self.sample_rate]
+            for wav, sr in impulses
+        ]
+        return [
+            (wav) / (torch.linalg.vector_norm(wav, ord=2)) for wav in impulses
+        ]
+
+    def _get_noise(self, noise_paths: list):
+        noises = [torchaudio.load(path) for path in noise_paths]
+        noises = [
+            AF.resample(
+                waveform=wav, orig_freq=sr, new_freq=config["sample_rate"]
+            ).mean(0, keepdim=True)[:, : self.num_samples]
+            for wav, sr in noises
+        ]
+
+        for wav in noises:
+            assert wav.shape[-1] == self.num_samples, "noise wav too short"
+
+        return noises
+
+    def apply_reverb(self, wav: torch.Tensor):
+        # wav: (bz, L)
+        batch_size, _ = wav.shape
+
+        reverb_strength = (
+            torch.Tensor([random.uniform(0, 1) for _ in range(batch_size)])
+            .unsqueeze(-1)
+            .to(wav.device)
+        )
+        reverb_type = random.randint(0, self.num_impulse - 1)
+        impulse = getattr(self, f"impulse_{reverb_type}")
+
+        reverb = AF.fftconvolve(wav, impulse, mode="full")[
+            :, : self.num_samples
+        ]
+        if self.reverb_factor > 1:
+            for _ in range(self.reverb_factor - 1):
+                reverb = AF.fftconvolve(reverb, impulse, mode="full")[
+                    : self.num_samples
+                ]
+
+        res = (reverb_strength * reverb) + ((1 - reverb_strength) * wav)
+
+        return res
+
+    def apply_noise(self, wav: torch.tensor):
+        batch_size, _ = wav.shape
+
+        snr_dbs = torch.tensor(
+            [
+                random.randint(self.min_snr, self.max_snr)
+                for _ in range(batch_size)
+            ]
+        ).to(wav.device)
+        noise_type = random.randint(0, self.num_noise - 1)
+        noise = getattr(self, f"noise_{noise_type}")
+
+        return AF.add_noise(waveform=wav, noise=noise, snr=snr_dbs)
+
+    def aug_pitch(self, wav: torch.Tensor, *seqs: torch.Tensor):
+        shift = random.randint(-self.max_pitch_shift, self.max_pitch_shift)
+        shift = 1
+
+        if seqs:
+            for seq in seqs:
+                assert seq.shape[0] == wav.shape[0]
+
+            if shift == 0:
+                return wav, [seq for seq in seqs]
+            else:
+                wav_aug = AF.pitch_shift(
+                    waveform=wav,
+                    sample_rate=self.sample_rate,
+                    n_steps=shift,
+                    n_fft=512,
+                )
+                return wav_aug, [
+                    self.tokenizer.pitch_aug(seq, shift) for seq in seqs
+                ]
+        else:
+            if shift == 0:
+                return wav
+            else:
+                return AF.pitch_shift(
+                    waveform=wav,
+                    sample_rate=self.sample_rate,
+                    n_steps=shift,
+                    n_fft=512,
+                )
+
+    def aug_wav(self, wav: torch.Tensor):
+        return self.apply_reverb(self.apply_noise(wav))
+
+    def mel(self, wav: torch.Tensor):
+        mel_spec = self.melspec_transform(wav)[..., :-1]
+
+        log_spec = torch.clamp(mel_spec, min=1e-10).log10()
+
+        max_over_mels = log_spec.max(dim=1, keepdim=True)[0]
+        max_log_spec = max_over_mels.max(dim=2, keepdim=True)[0]
+        log_spec = torch.maximum(log_spec, max_log_spec - 8.0)
+
+        log_spec = (log_spec + 4.0) / 4.0
+
+        return log_spec
+
+    def forward(self, wav: torch.Tensor, *seqs: torch.Tensor):
+        if seqs:
+            wav, seqs = self.aug_pitch(wav, *seqs)
+        else:
+            wav = self.aug_pitch(wav)
+
+        if random.random() < 0.2:
+            if seqs:
+                return self.mel(self.aug_wav(wav)), seqs
+            else:
+                return self.mel(self.aug_wav(wav))
+        else:
+            if seqs:
+                return self.spec_aug(self.mel(self.aug_wav(wav))), seqs
+            else:
+                return self.spec_aug(self.mel(self.aug_wav(wav)))

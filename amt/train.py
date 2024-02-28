@@ -18,6 +18,7 @@ from tqdm import tqdm
 
 from amt.tokenizer import AmtTokenizer
 from amt.model import AmtEncoderDecoder, ModelConfig
+from amt.audio import AudioTransform
 from amt.data import AmtDataset
 from amt.config import load_model_config
 from aria.utils import _load_weight
@@ -248,6 +249,7 @@ def _train(
     model: AmtEncoderDecoder,
     train_dataloader: DataLoader,
     val_dataloader: DataLoader,
+    audio_transform: AudioTransform,
     optimizer: torch.optim.Optimizer,
     scheduler: torch.optim.lr_scheduler.LRScheduler = None,
     steps_per_checkpoint: int | None = None,
@@ -258,7 +260,9 @@ def _train(
     def profile_flops(dataloader: DataLoader):
         def _bench():
             for batch in dataloader:
-                mel, src, tgt = batch  # (b_sz, s_len), (b_sz, s_len, v_sz)
+                wav, src, tgt = batch  # (b_sz, s_len), (b_sz, s_len, v_sz)
+                with torch.no_grad():
+                    mel, (src, tgt) = audio_transform.forward(wav, src, tgt)
                 logits = model(mel, src)  # (b_sz, s_len, v_sz)
                 logits = logits.transpose(1, 2)
                 loss = loss_fn(logits, tgt)
@@ -333,7 +337,9 @@ def _train(
             #     of_batch_exists = True
             #     mel, src, tgt = batch  # (b_sz, s_len), (b_sz, s_len, v_sz)
 
-            mel, src, tgt = batch  # (b_sz, s_len), (b_sz, s_len, v_sz)
+            wav, src, tgt = batch  # (b_sz, s_len), (b_sz, s_len, v_sz)
+            with torch.no_grad():
+                mel, (src, tgt) = audio_transform.forward(wav, src, tgt)
             logits = model(mel, src)  # (b_sz, s_len, v_sz)
             logits = logits.transpose(1, 2)  # Transpose for CrossEntropyLoss
             loss = loss_fn(logits, tgt)
@@ -399,8 +405,9 @@ def _train(
                 leave=False,
             )
         ):
-            mel, src, tgt = batch
+            wav, src, tgt = batch
             with torch.no_grad():
+                mel, (src, tgt) = audio_transform.forward(wav, src, tgt)
                 logits = model(mel, src)
             logits = logits.transpose(1, 2)  # Transpose for CrossEntropyLoss
             loss = loss_fn(logits, tgt)
@@ -541,6 +548,7 @@ def resume_train(
     model_config = ModelConfig(**load_model_config(model_name))
     model_config.set_vocab_size(tokenizer.vocab_size)
     model = AmtEncoderDecoder(model_config)
+    audio_transform = AudioTransform()
     logger.info(f"Loaded model with config: {load_model_config(model_name)}")
 
     train_dataloader, val_dataloader = get_dataloaders(
@@ -571,12 +579,14 @@ def resume_train(
 
     (
         model,
+        audio_transform,
         train_dataloader,
         val_dataloader,
         optimizer,
         scheduler,
     ) = accelerator.prepare(
         model,
+        audio_transform,
         train_dataloader,
         val_dataloader,
         optimizer,
@@ -600,6 +610,7 @@ def resume_train(
         model=model,
         train_dataloader=train_dataloader,
         val_dataloader=val_dataloader,
+        audio_transform=audio_transform,
         optimizer=optimizer,
         scheduler=scheduler,
         steps_per_checkpoint=steps_per_checkpoint,
@@ -657,6 +668,7 @@ def train(
     model = AmtEncoderDecoder(model_config)
     # logger.info("Compiling model...")
     # model = torch.compile(model)
+    audio_transform = AudioTransform()
     logger.info(f"Loaded model with config: {load_model_config(model_name)}")
     if mode == "finetune":
         try:
@@ -695,12 +707,14 @@ def train(
 
     (
         model,
+        audio_transform,
         train_dataloader,
         val_dataloader,
         optimizer,
         scheduler,
     ) = accelerator.prepare(
         model,
+        audio_transform,
         train_dataloader,
         val_dataloader,
         optimizer,
@@ -716,6 +730,7 @@ def train(
         model=model,
         train_dataloader=train_dataloader,
         val_dataloader=val_dataloader,
+        audio_transform=audio_transform,
         optimizer=optimizer,
         scheduler=scheduler,
         steps_per_checkpoint=steps_per_checkpoint,

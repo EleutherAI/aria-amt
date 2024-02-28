@@ -395,3 +395,20 @@ class AmtTokenizer(Tokenizer):
                 return res
 
         return msg_mixup
+
+    def pitch_aug(self, seqs, shift: int):
+        """This functions acts on tensors and is used in audio.AudioFeature"""
+        batch_size, seq_len = seqs.shape
+
+        for i in range(batch_size):
+            for j in range(seq_len):
+                tok = self.id_to_tok[seqs[i, j].item()]
+                if type(tok) is tuple and tok[0] in {"on", "off"}:
+                    msg_type, pitch = tok
+                    seqs[i, j] = self.tok_to_id.get(
+                        (msg_type, pitch + shift), self.unk_tok
+                    )
+                elif tok == self.pad_tok:
+                    break
+
+        return seqs
