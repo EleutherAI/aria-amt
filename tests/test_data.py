@@ -1,6 +1,7 @@
 import unittest
 import logging
 import os
+import time
 
 from amt.data import get_features, AmtDataset
 from amt.tokenizer import AmtTokenizer
@@ -26,7 +27,13 @@ class TestDataGen(unittest.TestCase):
 
 class TestAmtDataset(unittest.TestCase):
     def test_build(self):
-        matched_paths = [("tests/test_data/147.wav", "tests/test_data/147.mid")]
+        matched_paths = [
+            ("tests/test_data/147.wav", "tests/test_data/147.mid")
+            for _ in range(3)
+        ]
+        if os.path.isfile("tests/test_results/dataset.jsonl"):
+            os.remove("tests/test_results/dataset.jsonl")
+
         AmtDataset.build(
             matched_load_paths=matched_paths,
             save_path="tests/test_results/dataset.jsonl",
@@ -53,7 +60,7 @@ class TestAmtDataset(unittest.TestCase):
         dataset = AmtDataset(load_path=MAESTRO_PATH)
         for idx, (mel, src, tgt) in enumerate(dataset):
             src_dec, tgt_dec = tokenizer.decode(src), tokenizer.decode(tgt)
-            if (idx + 1) % 200 == 0:
+            if (idx + 1) % 100 == 0:
                 break
             if idx % 7 == 0:
                 src_mid_dict = tokenizer._detokenize_midi_dict(

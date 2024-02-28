@@ -40,12 +40,15 @@ def build_maestro(args):
 
     assert os.path.isdir(args.dir), "MAESTRO directory not found"
     assert os.path.isfile(args.csv), "MAESTRO csv not found"
-    if (
-        os.path.isfile(args.train)
-        or os.path.isfile(args.val)
-        or os.path.isfile(args.test)
-    ):
-        print("Dataset files already exist - overwriting")
+    if os.path.isfile(args.train):
+        print(f"Dataset file already exists at {args.train} - removing")
+        os.remove(args.train)
+    if os.path.isfile(args.val):
+        print(f"Dataset file already exists at {args.val} - removing")
+        os.remove(args.val)
+    if os.path.isfile(args.test):
+        print(f"Dataset file already exists at {args.test} - removing")
+        os.remove(args.test)
 
     matched_paths_train = []
     matched_paths_val = []

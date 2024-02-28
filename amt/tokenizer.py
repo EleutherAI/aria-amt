@@ -241,7 +241,6 @@ class AmtTokenizer(Tokenizer):
                     if DEBUG:
                         raise Exception
                 else:
-
                     notes_to_close[tok_1_data] = (tok_2_data, tok_3_data)
             elif tok_1_type == "off":
                 if tok_2_type != "onset":
@@ -322,6 +321,9 @@ class AmtTokenizer(Tokenizer):
 
     def export_msg_mixup(self):
         def msg_mixup(src: list):
+            def round_to_base(n, base=150):
+                return base * round(n / base)
+
             # Process bos, eos, and pad tokens
             orig_len = len(src)
             seen_pad_tok = False

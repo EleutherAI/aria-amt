@@ -116,7 +116,7 @@ def mel_filters(device, n_mels: int) -> torch.Tensor:
             mel_128=librosa.filters.mel(sr=16000, n_fft=400, n_mels=128),
         )
     """
-    assert n_mels in {80, 128}, f"Unsupported n_mels: {n_mels}"
+    assert n_mels in {80, 128, 256}, f"Unsupported n_mels: {n_mels}"
 
     filters_path = os.path.join(
         os.path.dirname(__file__), "assets", "mel_filters.npz"
@@ -127,7 +127,7 @@ def mel_filters(device, n_mels: int) -> torch.Tensor:
 
 def log_mel_spectrogram(
     audio: Union[str, np.ndarray, torch.Tensor],
-    n_mels: int = 80,
+    n_mels: int = 256,
     padding: int = 0,
     device: Optional[Union[str, torch.device]] = None,
 ):

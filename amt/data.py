@@ -1,11 +1,9 @@
 import mmap
 import os
-import logging
-import json
-import jsonlines
+import shutil
+import orjson
 import torch
 
-from typing import Callable
 from multiprocessing import Pool
 
 from aria.data.midi import MidiDict
@@ -17,36 +15,19 @@ from amt.audio import (
     N_FRAMES,
 )
 
-config = load_config()["data"]
-STRIDE_FACTOR = config["stride_factor"]
+config = load_config()
+STRIDE_FACTOR = config["data"]["stride_factor"]
 
 
-def setup_logger():
-    # Get logger and reset all handlers
-    logger = logging.getLogger(__name__)
-    for h in logger.handlers[:]:
-        logger.removeHandler(h)
-
-    logger.propagate = False
-    logger.setLevel(logging.INFO)
-    formatter = logging.Formatter(
-        "[%(asctime)s] %(name)s: [%(levelname)s] %(message)s",
-    )
-
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.INFO)
-    ch.setFormatter(formatter)
-    logger.addHandler(ch)
-
-    return logger
-
-
-def get_features(audio_path: str, mid_path: str = ""):
+def get_features(
+    audio_path: str, mid_path: str = "", return_json: bool = False
+):
     """This function yields tuples of matched log mel spectrograms and
     tokenized sequences (np.array, list). If it is given only an audio path
     then it will return an empty list for the mid_feature
     """
     tokenizer = AmtTokenizer()
+    n_mels = config["audio"]["n_mels"]
 
     if not os.path.isfile(audio_path):
         return None
@@ -57,7 +38,7 @@ def get_features(audio_path: str, mid_path: str = ""):
         return None
 
     try:
-        log_spec = log_mel_spectrogram(audio=audio_path)
+        log_spec = log_mel_spectrogram(audio=audio_path, n_mels=n_mels)
         if mid_path != "":
             midi_dict = MidiDict.from_midi(mid_path)
         else:
@@ -79,19 +60,37 @@ def get_features(audio_path: str, mid_path: str = ""):
         else:
             mid_feature = []
 
+        if return_json is True:
+            audio_feature = audio_feature.tolist()
+
         res.append((audio_feature, mid_feature))
 
     return res
 
 
-def get_features_mp(args):
-    """Multiprocessing wrapper for get_features"""
-    res = get_features(*args)
+def write_features(args):
+    audio_path, mid_path, save_path = args
+    features = get_features(
+        audio_path=audio_path,
+        mid_path=mid_path,
+        return_json=False,
+    )
+    dirname, basename = os.path.split(save_path)
+    proc_save_path = os.path.join(dirname, str(os.getpid()) + basename)
 
-    if res is None:
-        return False, None
-    else:
-        return True, res
+    with open(proc_save_path, mode="ab") as file:
+        for mel, seq in features:
+            file.write(
+                orjson.dumps(
+                    mel.numpy(),
+                    option=orjson.OPT_SERIALIZE_NUMPY,
+                )
+            )
+            file.write(b"\n")
+            file.write(orjson.dumps(seq))
+            file.write(b"\n")
+
+    return proc_save_path
 
 
 class AmtDataset(torch.utils.data.Dataset):
@@ -127,9 +126,9 @@ class AmtDataset(torch.utils.data.Dataset):
         self.file_mmap.seek(self.index[idx])
 
         # Load data from line
-        spec, _seq = json.loads(self.file_mmap.readline())
+        mel = torch.tensor(orjson.loads(self.file_mmap.readline()))
+        _seq = orjson.loads(self.file_mmap.readline())
 
-        spec = torch.tensor(spec)  # Format spectrogram into tensor
         _seq = [_format(tok) for tok in _seq]  # Format seq
         _seq = self.aug_fn(_seq)  # Data augmentation
 
@@ -142,15 +141,15 @@ class AmtDataset(torch.utils.data.Dataset):
             seq_len=self.config["max_seq_len"],
         )
 
-        return spec, self.tokenizer.encode(src), self.tokenizer.encode(tgt)
+        return mel, self.tokenizer.encode(src), self.tokenizer.encode(tgt)
 
     def _build_index(self):
         self.file_mmap.seek(0)
         index = []
         while True:
             pos = self.file_mmap.tell()
-            line_buffer = self.file_mmap.readline()
-            if line_buffer == b"":
+            self.file_mmap.readline()
+            if self.file_mmap.readline() == b"":
                 break
             else:
                 index.append(pos)
@@ -162,33 +161,33 @@ class AmtDataset(torch.utils.data.Dataset):
         cls,
         matched_load_paths: list[tuple[str, str]],
         save_path: str,
-        num_processes: int = 4,
+        num_processes: int = 1,
     ):
-        def _get_features(_matched_load_paths: list):
-            num_paths = len(_matched_load_paths)
-            for idx, entry in enumerate(_matched_load_paths):
-                success, res = get_features_mp(entry)
+        assert os.path.isfile(save_path) is False, f"{save_path} already exists"
+        num_paths = len(matched_load_paths)
+        with Pool(processes=num_processes) as pool:
+            sharded_save_paths = []
+            res = pool.imap_unordered(
+                write_features,
+                ((ap, mp, save_path) for ap, mp in matched_load_paths),
+            )
+            for idx, proc_save_path in enumerate(res):
                 if idx % 10 == 0 and idx != 0:
-                    print(f"Processed audio-mid pairs: {idx}/{num_paths}")
-                if success == False:
-                    continue
-                for _audio_feature, _mid_feature in res:
-                    yield _audio_feature.tolist(), _mid_feature
+                    print(f"Finished {idx}/{num_paths}")
+                if proc_save_path not in sharded_save_paths:
+                    sharded_save_paths.append(proc_save_path)
 
-            # MP CODE DOESN'T WORK FOR SOME REASON !!
+        # This is bad, however cat is fast
+        if shutil.which("cat") is None:
+            print("The GNU cat command is not available")
+        else:
+            print("Concatinating sharded dataset files")
+            shell_cmd = f"cat "
+            for _path in sharded_save_paths:
+                shell_cmd += f"{_path} "
+                print()
+            shell_cmd += f">> {save_path}"
 
-            # with Pool(num_processes) as pool:
-            #     results = pool.imap(get_features_mp, _matched_load_paths)
-            #     num_paths = len(_matched_load_paths)
-            #     for idx, (success, res) in enumerate(results):
-            #         if idx % 10 == 0 and idx != 0:
-            #             print(f"Processed audio-mid pairs: {idx}/{num_paths}")
-
-            #         if success == False:
-            #             continue
-            #         for _audio_feature, _mid_feature in res:
-            #             yield _audio_feature.tolist(), _mid_feature
-
-        with jsonlines.open(save_path, mode="w") as writer:
-            for audio_feature, mid_feature in _get_features(matched_load_paths):
-                writer.write([audio_feature, mid_feature])
+            os.system(shell_cmd)
+            for _path in sharded_save_paths:
+                os.remove(_path)
