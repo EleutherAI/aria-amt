@@ -17,6 +17,9 @@ from aria.data.midi import MidiDict
 # sort of branching to make sure that we don't miss notes, ect... Implement this
 # next week -- Exciting problem (checkout other inference algos)
 
+# Implement maximum note len =5s
+# Implement either beam search or decoding initial onset note on first
+
 
 def greedy_sample(
     model: AmtEncoderDecoder,
@@ -38,6 +41,7 @@ def greedy_sample(
         audio_seg = audio_seg.unsqueeze(0).to(device)
         seq = tokenizer.encode(tokenizer.trunc_seq(prefix, MAX_SEQ_LEN))
         seq = torch.tensor(seq).unsqueeze(0).to(device)
+        audio_feature = model.embed_audio(mel=audio_seg)
 
         for idx in (
             pbar := tqdm(
@@ -46,21 +50,14 @@ def greedy_sample(
                 leave=False,
             )
         ):
-            logits = model.forward(mel=audio_seg, tokens=seq[:, :idx])
+            logits = model.logits(
+                audio_features=audio_feature, tokens=seq[:, :idx]
+            )
             next_tok_id = torch.argmax(logits[0, -1], dim=-1)
-            # probs = torch.softmax(logits[0, -1], dim=-1)
-            # next_tok_id = torch.argmax(probs, dim=-1)
 
-            # Debug logging:
-            # print(f"input seq shape: {seq[:, :idx].shape}")
-            # print(f"logits shape: {logits.shape}")
-            # print(f"probs shape: {probs.shape}")
-            # print(int(next_tok_id), tokenizer.id_to_tok[int(next_tok_id)])
-
+            seq[0, idx] = next_tok_id
             if next_tok_id == pad_id or next_tok_id == eos_id:
                 break
-            else:
-                seq[0, idx] = next_tok_id
 
         if idx == MAX_SEQ_LEN - 2:
             print("WARNING: Ran out of context when generating sequence")
@@ -81,7 +78,7 @@ def greedy_sample(
     model.eval()
     tokenizer = AmtTokenizer()
     _unclosed_notes = []
-    concat_seq = []
+    concat_seq = [tokenizer.bos_tok]
     _onset_adj = 0
     for idx, _audio_seg in enumerate(audio_segments):
         _seq = [("prev", p) for p in _unclosed_notes] + [tokenizer.bos_tok]
@@ -99,14 +96,17 @@ def greedy_sample(
         __midi = __midi_dict.to_midi()
         __midi.save(f"/weka/proj-aria/aria-amt/samples/res{idx}.mid")
 
-        print(f"Done {idx}/{len(audio_segments)}:\n{_seq}")
-
+        print(f"Done {idx + 1}/{len(audio_segments)}")
         for tok in _seq:
             if type(tok) is tuple and tok[0] == "onset":
                 _onset_orig = tok[1]
                 _onset_adj = _onset_orig + (idx * LEN_MS)
                 concat_seq.append(("onset", _onset_adj))
-            elif tok is tokenizer.pad_tok:
+            elif type(tok) is tuple and tok[0] == "prev":
+                continue
+            elif tok is tokenizer.bos_tok:
+                continue
+            elif tok is tokenizer.pad_tok or tok is tokenizer.eos_tok:
                 break
             else:
                 concat_seq.append(tok)

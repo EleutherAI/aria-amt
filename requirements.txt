@@ -4,4 +4,4 @@ torchaudio
 accelerate 
 mido
 tqdm
-jsonlines
+orjson

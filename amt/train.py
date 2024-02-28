@@ -138,9 +138,9 @@ def _get_optim(
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=lr,
-        weight_decay=0.01,
-        betas=(0.9, 0.95),
-        eps=1e-5,
+        weight_decay=0.1,
+        betas=(0.9, 0.98),
+        eps=1e-6,
     )
 
     warmup_lrs = torch.optim.lr_scheduler.LinearLR(
@@ -365,6 +365,9 @@ def _train(
 
             # Backwards step
             accelerator.backward(loss)
+            if accelerator.sync_gradients:
+                accelerator.clip_grad_norm_(model.parameters(), 1.0)
+
             optimizer.step()
             optimizer.zero_grad()
             if scheduler:
