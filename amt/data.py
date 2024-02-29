@@ -10,7 +10,7 @@ from multiprocessing import Pool
 from aria.data.midi import MidiDict
 from amt.tokenizer import AmtTokenizer
 from amt.config import load_config
-from amt.audio import pad_or_trim
+from amt.audio import pad_or_trim, AudioTransform
 
 
 def get_wav_mid_segments(
