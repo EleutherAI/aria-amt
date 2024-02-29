@@ -339,7 +339,8 @@ def _train(
 
             wav, src, tgt = batch  # (b_sz, s_len), (b_sz, s_len, v_sz)
             with torch.no_grad():
-                mel, (src, tgt) = audio_transform.forward(wav, src, tgt)
+                mel = audio_transform.mel(wav)
+                # mel, (src, tgt) = audio_transform.forward(wav, src, tgt)
             logits = model(mel, src)  # (b_sz, s_len, v_sz)
             logits = logits.transpose(1, 2)  # Transpose for CrossEntropyLoss
             loss = loss_fn(logits, tgt)

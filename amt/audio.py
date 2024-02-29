@@ -188,7 +188,7 @@ class AudioTransform(torch.nn.Module):
         reverb_factor: int = 1,
         min_snr: int = 10,
         max_snr: int = 40,
-        max_pitch_shift: int = 4,
+        max_pitch_shift: int = 5,
     ):
         super().__init__()
         self.tokenizer = AmtTokenizer()
@@ -232,10 +232,10 @@ class AudioTransform(torch.nn.Module):
         # Spec aug
         self.spec_aug = torch.nn.Sequential(
             torchaudio.transforms.FrequencyMasking(
-                freq_mask_param=10, iid_masks=True
+                freq_mask_param=15, iid_masks=True
             ),
             torchaudio.transforms.TimeMasking(
-                time_mask_param=100, iid_masks=True
+                time_mask_param=500, iid_masks=True
             ),
         )
 
