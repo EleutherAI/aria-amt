@@ -1,17 +1,14 @@
 import unittest
 import logging
+import torch
 import os
 
 from amt.tokenizer import AmtTokenizer
-from aria.tokenizer import AbsTokenizer
 from aria.data.midi import MidiDict
 
 logging.basicConfig(level=logging.INFO)
 if os.path.isdir("tests/test_results") is False:
     os.mkdir("tests/test_results")
-
-
-# Add test for unk tok
 
 
 class TestAmtTokenizer(unittest.TestCase):
@@ -39,6 +36,45 @@ class TestAmtTokenizer(unittest.TestCase):
             _tokenize_detokenize("maestro1.mid", start=START, end=END)
             _tokenize_detokenize("maestro2.mid", start=START, end=END)
             _tokenize_detokenize("maestro3.mid", start=START, end=END)
+
+    def test_pitch_aug(self):
+        tokenizer = AmtTokenizer(return_tensors=True)
+
+        midi_dict_1 = MidiDict.from_midi("tests/test_data/maestro1.mid")
+        midi_dict_2 = MidiDict.from_midi("tests/test_data/maestro2.mid")
+        midi_dict_3 = MidiDict.from_midi("tests/test_data/maestro3.mid")
+        seq_1 = tokenizer._tokenize_midi_dict(midi_dict_1, 0, 30000)
+        seq_1 = tokenizer.trunc_seq(seq_1, 2048)
+        seq_2 = tokenizer.trunc_seq(
+            tokenizer._tokenize_midi_dict(midi_dict_2, 0, 30000), 2048
+        )
+        seq_2 = tokenizer.trunc_seq(seq_2, 2048)
+        seq_3 = tokenizer.trunc_seq(
+            tokenizer._tokenize_midi_dict(midi_dict_3, 0, 30000), 2048
+        )
+        seq_3 = tokenizer.trunc_seq(seq_3, 2048)
+
+        seqs = torch.stack(
+            (
+                tokenizer.encode(seq_1),
+                tokenizer.encode(seq_2),
+                tokenizer.encode(seq_3),
+            )
+        )
+        aug_seqs = tokenizer.pitch_aug(seqs, shift=2)
+
+        midi_dict_1_aug = tokenizer._detokenize_midi_dict(
+            tokenizer.decode(aug_seqs[0]), 30000
+        )
+        midi_dict_2_aug = tokenizer._detokenize_midi_dict(
+            tokenizer.decode(aug_seqs[1]), 30000
+        )
+        midi_dict_3_aug = tokenizer._detokenize_midi_dict(
+            tokenizer.decode(aug_seqs[2]), 30000
+        )
+        midi_dict_1_aug.to_midi().save("tests/test_results/pitch1.mid")
+        midi_dict_2_aug.to_midi().save("tests/test_results/pitch2.mid")
+        midi_dict_3_aug.to_midi().save("tests/test_results/pitch3.mid")
 
     def test_aug(self):
         def aug(_midi_dict: MidiDict, _start_ms: int, _end_ms: int):

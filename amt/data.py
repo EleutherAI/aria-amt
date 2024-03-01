@@ -3,23 +3,17 @@ import os
 import shutil
 import orjson
 import torch
+import torchaudio
 
 from multiprocessing import Pool
 
 from aria.data.midi import MidiDict
 from amt.tokenizer import AmtTokenizer
 from amt.config import load_config
-from amt.audio import (
-    log_mel_spectrogram,
-    pad_or_trim,
-    N_FRAMES,
-)
-
-config = load_config()
-STRIDE_FACTOR = config["data"]["stride_factor"]
+from amt.audio import pad_or_trim
 
 
-def get_features(
+def get_wav_mid_segments(
     audio_path: str, mid_path: str = "", return_json: bool = False
 ):
     """This function yields tuples of matched log mel spectrograms and
@@ -27,35 +21,43 @@ def get_features(
     then it will return an empty list for the mid_feature
     """
     tokenizer = AmtTokenizer()
-    n_mels = config["audio"]["n_mels"]
+    config = load_config()
+    stride_factor = config["data"]["stride_factor"]
+    sample_rate = config["audio"]["sample_rate"]
+    chunk_len = config["audio"]["chunk_len"]
+    num_samples = sample_rate * chunk_len
+    samples_per_ms = sample_rate // 1000
 
     if not os.path.isfile(audio_path):
         return None
 
+    # Load midi if required
     if mid_path == "":
-        pass
+        midi_dict = None
     elif not os.path.isfile(mid_path):
         return None
+    else:
+        midi_dict = MidiDict.from_midi(mid_path)
 
-    try:
-        log_spec = log_mel_spectrogram(audio=audio_path, n_mels=n_mels)
-        if mid_path != "":
-            midi_dict = MidiDict.from_midi(mid_path)
-        else:
-            midi_dict = None
-    except Exception as e:
-        print("Failed to convert files into features")
-        raise e
+    # Load audio
+    wav, sr = torchaudio.load(audio_path)
+    if sr != sample_rate:
+        wav = torchaudio.functional.resample(
+            waveform=wav,
+            orig_freq=sr,
+            new_freq=sample_rate,
+        ).mean(0)
 
-    _, total_frames = log_spec.shape
+    # Create features
+    total_samples = wav.shape[-1]
     res = []
-    for start_frame in range(0, total_frames, N_FRAMES // STRIDE_FACTOR):
-        audio_feature = pad_or_trim(log_spec[:, start_frame:], length=N_FRAMES)
+    for idx in range(0, total_samples, num_samples // stride_factor):
+        audio_feature = pad_or_trim(wav[idx:], length=num_samples)
         if midi_dict is not None:
             mid_feature = tokenizer._tokenize_midi_dict(
                 midi_dict=midi_dict,
-                start_ms=start_frame * 10,
-                end_ms=(start_frame + N_FRAMES) * 10,
+                start_ms=idx // samples_per_ms,
+                end_ms=(idx + num_samples) / samples_per_ms,
             )
         else:
             mid_feature = []
@@ -70,7 +72,7 @@ def get_features(
 
 def write_features(args):
     audio_path, mid_path, save_path = args
-    features = get_features(
+    features = get_wav_mid_segments(
         audio_path=audio_path,
         mid_path=mid_path,
         return_json=False,
@@ -79,10 +81,10 @@ def write_features(args):
     proc_save_path = os.path.join(dirname, str(os.getpid()) + basename)
 
     with open(proc_save_path, mode="ab") as file:
-        for mel, seq in features:
+        for wav, seq in features:
             file.write(
                 orjson.dumps(
-                    mel.numpy(),
+                    wav.numpy(),
                     option=orjson.OPT_SERIALIZE_NUMPY,
                 )
             )
@@ -97,7 +99,7 @@ class AmtDataset(torch.utils.data.Dataset):
     def __init__(self, load_path: str):
         self.tokenizer = AmtTokenizer(return_tensors=True)
         self.config = load_config()["data"]
-        self.aug_fn = self.tokenizer.export_msg_mixup()
+        self.mixup_fn = self.tokenizer.export_msg_mixup()
         self.file_buff = open(load_path, mode="r")
         self.file_mmap = mmap.mmap(
             self.file_buff.fileno(), 0, access=mmap.ACCESS_READ
@@ -126,11 +128,11 @@ class AmtDataset(torch.utils.data.Dataset):
         self.file_mmap.seek(self.index[idx])
 
         # Load data from line
-        mel = torch.tensor(orjson.loads(self.file_mmap.readline()))
+        wav = torch.tensor(orjson.loads(self.file_mmap.readline()))
         _seq = orjson.loads(self.file_mmap.readline())
 
         _seq = [_format(tok) for tok in _seq]  # Format seq
-        _seq = self.aug_fn(_seq)  # Data augmentation
+        _seq = self.mixup_fn(_seq)  # Data augmentation
 
         src = self.tokenizer.trunc_seq(
             seq=_seq,
@@ -141,7 +143,7 @@ class AmtDataset(torch.utils.data.Dataset):
             seq_len=self.config["max_seq_len"],
         )
 
-        return mel, self.tokenizer.encode(src), self.tokenizer.encode(tgt)
+        return wav, self.tokenizer.encode(src), self.tokenizer.encode(tgt)
 
     def _build_index(self):
         self.file_mmap.seek(0)
