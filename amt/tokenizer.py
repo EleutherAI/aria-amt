@@ -1,7 +1,9 @@
 import random
 import os
 import copy
+import functools
 
+from torch import Tensor
 from collections import defaultdict
 
 from aria.data.midi import MidiDict, get_duration_ms
@@ -396,19 +398,37 @@ class AmtTokenizer(Tokenizer):
 
         return msg_mixup
 
-    def pitch_aug(self, seqs, shift: int):
-        """This functions acts on tensors and is used in audio.AudioFeature"""
-        batch_size, seq_len = seqs.shape
+    def export_tensor_pitch_aug(self):
+        def tensor_pitch_aug(
+            seq: Tensor,
+            shift: int,
+            tok_to_id: dict,
+            id_to_tok: dict,
+            pad_tok: str,
+            unk_tok: str,
+        ):
+            """This acts on (batched) tensors, applying pitch aug in place"""
+            if shift == 0:
+                return seq
 
-        for i in range(batch_size):
-            for j in range(seq_len):
-                tok = self.id_to_tok[seqs[i, j].item()]
-                if type(tok) is tuple and tok[0] in {"on", "off"}:
-                    msg_type, pitch = tok
-                    seqs[i, j] = self.tok_to_id.get(
-                        (msg_type, pitch + shift), self.unk_tok
-                    )
-                elif tok == self.pad_tok:
-                    break
+            batch_size, seq_len = seq.shape
+            for i in range(batch_size):
+                for j in range(seq_len):
+                    tok = id_to_tok[seq[i, j].item()]
+                    if type(tok) is tuple and tok[0] in {"on", "off"}:
+                        msg_type, pitch = tok
+                        seq[i, j] = tok_to_id.get(
+                            (msg_type, pitch + shift), unk_tok
+                        )
+                    elif tok == pad_tok:
+                        break
 
-        return seqs
+            return seq
+
+        return functools.partial(
+            tensor_pitch_aug,
+            tok_to_id=self.tok_to_id,
+            id_to_tok=self.id_to_tok,
+            pad_tok=self.pad_tok,
+            unk_tok=self.unk_tok,
+        )

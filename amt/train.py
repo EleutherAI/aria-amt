@@ -1,6 +1,8 @@
 import os
 import sys
 import csv
+import random
+import functools
 import argparse
 import logging
 import torch
@@ -218,10 +220,26 @@ def get_dataloaders(
         f"Loaded datasets with length: train={len(train_dataset)}; val={len(val_dataset)}"
     )
 
+    # Pitch aug (to the sequence tensors) must be applied in the train
+    # dataloader as it needs to be done to every element in the batch equally.
+    # Having this code running on the main process was causing a bottlekneck.
+    tensor_pitch_aug = AmtTokenizer().export_tensor_pitch_aug()
+
+    def _collate_fn(seqs, max_pitch_shift: int):
+        wav, src, tgt = torch.utils.data.default_collate(seqs)
+
+        # Pitch aug
+        pitch_shift = random.randint(-max_pitch_shift, max_pitch_shift)
+        src = tensor_pitch_aug(seq=src, shift=pitch_shift)
+        tgt = tensor_pitch_aug(seq=tgt, shift=pitch_shift)
+
+        return wav, src, tgt, pitch_shift
+
     train_dataloader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         num_workers=num_workers,
+        collate_fn=functools.partial(_collate_fn, max_pitch_shift=5),
         shuffle=True,
     )
     val_dataloader = DataLoader(
@@ -260,9 +278,9 @@ def _train(
     def profile_flops(dataloader: DataLoader):
         def _bench():
             for batch in dataloader:
-                wav, src, tgt = batch  # (b_sz, s_len), (b_sz, s_len, v_sz)
+                wav, src, tgt, pitch_shift = batch
                 with torch.no_grad():
-                    mel, (src, tgt) = audio_transform.forward(wav, src, tgt)
+                    mel = audio_transform.forward(wav, shift=pitch_shift)
                 logits = model(mel, src)  # (b_sz, s_len, v_sz)
                 logits = logits.transpose(1, 2)
                 loss = loss_fn(logits, tgt)
@@ -272,7 +290,6 @@ def _train(
                 optimizer.zero_grad()
                 break
 
-        flop_counter = FlopCounterMode(display=False)
         logger.info(
             f"Model has "
             f"{'{:,}'.format(sum(p.numel() for p in model.parameters() if p.requires_grad))} "
@@ -318,8 +335,6 @@ def _train(
             lr_for_print = "{:.2e}".format(optimizer.param_groups[-1]["lr"])
 
         model.train()
-        of_batch_exists = False
-
         for __step, batch in (
             pbar := tqdm(
                 enumerate(dataloader),
@@ -330,16 +345,9 @@ def _train(
         ):
             step = __step + _resume_step + 1
 
-            # Code for forcing overfitting
-            # if (overfit is True) and (of_batch_exists is True):
-            #     pass
-            # else:
-            #     of_batch_exists = True
-            #     mel, src, tgt = batch  # (b_sz, s_len), (b_sz, s_len, v_sz)
-
-            wav, src, tgt = batch  # (b_sz, s_len), (b_sz, s_len, v_sz)
+            wav, src, tgt, pitch_shift = batch
             with torch.no_grad():
-                mel, (src, tgt) = audio_transform.forward(wav, src, tgt)
+                mel = audio_transform.forward(wav, shift=pitch_shift)
             logits = model(mel, src)  # (b_sz, s_len, v_sz)
             logits = logits.transpose(1, 2)  # Transpose for CrossEntropyLoss
             loss = loss_fn(logits, tgt)
@@ -407,7 +415,7 @@ def _train(
         ):
             wav, src, tgt = batch
             with torch.no_grad():
-                mel = audio_transform.mel(wav)
+                mel = audio_transform.log_mel(wav)
                 logits = model(mel, src)
             logits = logits.transpose(1, 2)  # Transpose for CrossEntropyLoss
             loss = loss_fn(logits, tgt)
@@ -548,6 +556,7 @@ def resume_train(
     model_config = ModelConfig(**load_model_config(model_name))
     model_config.set_vocab_size(tokenizer.vocab_size)
     model = AmtEncoderDecoder(model_config)
+    model = torch.compile(model)
     audio_transform = AudioTransform().to(accelerator.device)
     logger.info(f"Loaded model with config: {load_model_config(model_name)}")
 
@@ -664,9 +673,8 @@ def train(
     model_config = ModelConfig(**load_model_config(model_name))
     model_config.set_vocab_size(tokenizer.vocab_size)
     model = AmtEncoderDecoder(model_config)
-    audio_transform = AudioTransform().to(accelerator.device)
     model = torch.compile(model)
-    audio_transform.compile()
+    audio_transform = AudioTransform().to(accelerator.device)
     logger.info(f"Loaded model with config: {load_model_config(model_name)}")
     if mode == "finetune":
         try:

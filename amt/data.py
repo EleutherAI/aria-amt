@@ -10,7 +10,7 @@ from multiprocessing import Pool
 from aria.data.midi import MidiDict
 from amt.tokenizer import AmtTokenizer
 from amt.config import load_config
-from amt.audio import pad_or_trim, AudioTransform
+from amt.audio import pad_or_trim
 
 
 def get_wav_mid_segments(
@@ -99,7 +99,7 @@ class AmtDataset(torch.utils.data.Dataset):
     def __init__(self, load_path: str):
         self.tokenizer = AmtTokenizer(return_tensors=True)
         self.config = load_config()["data"]
-        self.aug_fn = self.tokenizer.export_msg_mixup()
+        self.mixup_fn = self.tokenizer.export_msg_mixup()
         self.file_buff = open(load_path, mode="r")
         self.file_mmap = mmap.mmap(
             self.file_buff.fileno(), 0, access=mmap.ACCESS_READ
@@ -132,7 +132,7 @@ class AmtDataset(torch.utils.data.Dataset):
         _seq = orjson.loads(self.file_mmap.readline())
 
         _seq = [_format(tok) for tok in _seq]  # Format seq
-        _seq = self.aug_fn(_seq)  # Data augmentation
+        _seq = self.mixup_fn(_seq)  # Data augmentation
 
         src = self.tokenizer.trunc_seq(
             seq=_seq,

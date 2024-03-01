@@ -188,14 +188,12 @@ class AudioTransform(torch.nn.Module):
         reverb_factor: int = 1,
         min_snr: int = 10,
         max_snr: int = 40,
-        max_pitch_shift: int = 5,
     ):
         super().__init__()
         self.tokenizer = AmtTokenizer()
         self.reverb_factor = reverb_factor
         self.min_snr = min_snr
         self.max_snr = max_snr
-        self.max_pitch_shift = max_pitch_shift
 
         self.config = load_config()["audio"]
         self.sample_rate = self.config["sample_rate"]
@@ -221,15 +219,15 @@ class AudioTransform(torch.nn.Module):
             self.register_buffer(f"noise_{i}", noise)
             self.num_noise += 1
 
-        # Mel-spec
-        self.melspec_transform = torchaudio.transforms.MelSpectrogram(
-            sample_rate=self.sample_rate,
+        self.spec_transform = torchaudio.transforms.Spectrogram(
             n_fft=self.config["n_fft"],
             hop_length=self.config["hop_len"],
-            n_mels=self.config["n_mels"],
         )
-
-        # Spec aug
+        self.mel_transform = torchaudio.transforms.MelScale(
+            n_mels=self.config["n_mels"],
+            sample_rate=self.config["sample_rate"],
+            n_stft=self.config["n_fft"] // 2 + 1,
+        )
         self.spec_aug = torch.nn.Sequential(
             torchaudio.transforms.FrequencyMasking(
                 freq_mask_param=15, iid_masks=True
@@ -311,66 +309,63 @@ class AudioTransform(torch.nn.Module):
 
         return AF.add_noise(waveform=wav, noise=noise, snr=snr_dbs)
 
-    def aug_pitch(self, wav: torch.Tensor, *seqs: torch.Tensor):
-        shift = random.randint(-self.max_pitch_shift, self.max_pitch_shift)
-        shift = 1
+    def shift_spec(self, specs: torch.Tensor, shift: int):
+        if shift == 0:
+            return specs
 
-        if seqs:
-            for seq in seqs:
-                assert seq.shape[0] == wav.shape[0]
+        freq_mult = 2 ** (shift / 12.0)
+        _, num_bins, L = specs.shape
+        new_num_bins = int(num_bins * freq_mult)
 
-            if shift == 0:
-                return wav, [seq for seq in seqs]
-            else:
-                wav_aug = AF.pitch_shift(
-                    waveform=wav,
-                    sample_rate=self.sample_rate,
-                    n_steps=shift,
-                    n_fft=512,
-                )
-                return wav_aug, [
-                    self.tokenizer.pitch_aug(seq, shift) for seq in seqs
-                ]
+        # Interpolate expects extra channel dim
+        specs = specs.unsqueeze(1)
+        shifted_specs = torch.nn.functional.interpolate(
+            specs, size=(new_num_bins, L), mode="bilinear", align_corners=False
+        )
+        shifted_specs = shifted_specs.squeeze(1)
+
+        if shift > 0:
+            shifted_specs = shifted_specs[:, :num_bins, :]
         else:
-            if shift == 0:
-                return wav
-            else:
-                return AF.pitch_shift(
-                    waveform=wav,
-                    sample_rate=self.sample_rate,
-                    n_steps=shift,
-                    n_fft=512,
-                )
+            padding = num_bins - shifted_specs.size(1)
+            shifted_specs = torch.nn.functional.pad(
+                shifted_specs, (0, 0, 0, padding), "constant", 0
+            )
+
+        return shifted_specs
 
     def aug_wav(self, wav: torch.Tensor):
         return self.apply_reverb(self.apply_noise(wav))
 
-    def mel(self, wav: torch.Tensor):
-        mel_spec = self.melspec_transform(wav)[..., :-1]
-
+    def norm_mel(self, mel_spec: torch.Tensor):
         log_spec = torch.clamp(mel_spec, min=1e-10).log10()
-
         max_over_mels = log_spec.max(dim=1, keepdim=True)[0]
         max_log_spec = max_over_mels.max(dim=2, keepdim=True)[0]
         log_spec = torch.maximum(log_spec, max_log_spec - 8.0)
-
         log_spec = (log_spec + 4.0) / 4.0
 
         return log_spec
 
-    def forward(self, wav: torch.Tensor, *seqs: torch.Tensor):
-        if seqs:
-            wav, seqs = self.aug_pitch(wav, *seqs)
-        else:
-            wav = self.aug_pitch(wav)
+    def log_mel(self, wav: torch.Tensor, shift: int | None = None):
+        spec = self.spec_transform(wav)[..., :-1]
+        if shift and shift != 0:
+            spec = self.shift_spec(spec, shift)
+        mel_spec = self.mel_transform(spec)
 
-        if random.random() < 0.2:
-            if seqs:
-                return self.mel(self.aug_wav(wav)), seqs
-            else:
-                return self.mel(self.aug_wav(wav))
-        else:
-            if seqs:
-                return self.spec_aug(self.mel(self.aug_wav(wav))), seqs
-            else:
-                return self.spec_aug(self.mel(self.aug_wav(wav)))
+        # Norm
+        log_spec = self.norm_mel(mel_spec)
+
+        return log_spec
+
+    def forward(self, wav: torch.Tensor, shift: int = 0):
+        # Reverb & noise
+        wav = self.aug_wav(wav)
+
+        # Spec & pitch shift
+        log_mel = self.log_mel(wav, shift)
+
+        # Spec aug
+        if random.random() > 0.2:
+            log_mel = self.spec_aug(log_mel)
+
+        return log_mel

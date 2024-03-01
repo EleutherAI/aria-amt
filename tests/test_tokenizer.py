@@ -4,7 +4,6 @@ import torch
 import os
 
 from amt.tokenizer import AmtTokenizer
-from aria.tokenizer import AbsTokenizer
 from aria.data.midi import MidiDict
 
 logging.basicConfig(level=logging.INFO)
