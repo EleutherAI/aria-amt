@@ -3,6 +3,7 @@
 import argparse
 import sys
 import os
+import glob
 
 from csv import DictReader
 
@@ -29,8 +30,15 @@ def _parse_transcribe_args():
     argp = argparse.ArgumentParser(prog="amt transcribe")
     argp.add_argument("model_name", help="name of model config file")
     argp.add_argument("cp", help="checkpoint path")
-    argp.add_argument("-load_path", help="wav file load path", required=True)
-    argp.add_argument("-save_path", help="midi file save path", required=True)
+    argp.add_argument("-load_path", help="path to mp3/wav file", required=False)
+    argp.add_argument(
+        "-load_dir", help="dir containing mp3/wav files", required=False
+    )
+    argp.add_argument("-save_dir", help="dir to save midi files", required=True)
+    argp.add_argument(
+        "-multi_gpu", help="use all GPUs", action="store_true", default=False
+    )
+    argp.add_argument("-bs", help="batch size", type=int, default=16)
 
     return argp.parse_args(sys.argv[2:])
 
@@ -99,37 +107,101 @@ def build_maestro(args):
 
 
 def transcribe(args):
+    import torch
     from torch.cuda import is_available as cuda_is_available
     from amt.tokenizer import AmtTokenizer
-    from amt.inference import greedy_sample
+    from amt.infer import batch_transcribe
     from amt.config import load_model_config
     from amt.model import ModelConfig, AmtEncoderDecoder
-    from aria.data.midi import MidiDict
     from aria.utils import _load_weight
 
-    assert os.path.isfile(args.load_path), "audio file not found"
+    assert cuda_is_available(), "CUDA device not found"
     assert os.path.isfile(args.cp), "model checkpoint file not found"
+    assert args.load_path or args.load_dir, "must give either load path or dir"
+    if args.load_path:
+        assert os.path.isfile(args.load_path), "audio file not found"
+        trans_mode = "single"
+    if args.load_dir:
+        assert os.path.isdir(args.load_dir), "load directory doesn't exist"
+        trans_mode = "batch"
+    if not os.path.exists(args.save_dir):
+        os.makedirs(args.save_dir)
+    assert os.path.isdir(args.save_dir), "save dir doesn't exist"
 
-    if not cuda_is_available():
-        print("CUDA device is not available. Using CPU instead.")
-        device = "cpu"
-    else:
-        device = "cuda"
-
+    # Setup model
     tokenizer = AmtTokenizer()
     model_config = ModelConfig(**load_model_config(args.model_name))
     model_config.set_vocab_size(tokenizer.vocab_size)
     model = AmtEncoderDecoder(model_config)
-    model_state = _load_weight(ckpt_path=args.cp, device=device)
-    model.load_state_dict(model_state)
+    model_state = _load_weight(ckpt_path=args.cp)
 
-    mid_dict = greedy_sample(
-        model=model,
-        audio_path=args.load_path,
-        device=device,
-    )
-    mid = mid_dict.to_midi()
-    mid.save(args.save_path)
+    # Fix keys in compiled model checkpoint
+    _model_state = {}
+    for k, v in model_state.items():
+        if k.startswith("_orig_mod."):
+            _model_state[k[len("_orig_mod.") :]] = v
+        else:
+            _model_state[k] = v
+    model_state = _model_state
+    model.load_state_dict(model_state)
+    torch.multiprocessing.set_start_method("spawn")
+
+    if trans_mode == "batch":
+        found_wav = glob.glob(
+            os.path.join(args.load_dir, "**/*.wav"), recursive=True
+        )
+        found_mp3 = glob.glob(
+            os.path.join(args.load_dir, "**/*.mp3"), recursive=True
+        )
+        print(f"Found {len(found_mp3)} mp3 and {len(found_wav)} wav files")
+        file_paths = found_mp3 + found_wav
+    else:
+        file_paths = [args.load_path]
+
+    if args.multi_gpu:
+        # Generate chunks
+        gpu_ids = [
+            int(id) for id in os.getenv("CUDA_VISIBLE_DEVICES").split(",")
+        ]
+        num_gpus = len(gpu_ids)
+        print(f"Visible gpu_ids: {gpu_ids}")
+
+        chunk_size = (len(file_paths) // num_gpus) + 1
+        chunks = [
+            file_paths[i : i + chunk_size]
+            for i in range(0, len(file_paths), chunk_size)
+        ]
+        print(f"Split {len(file_paths)} files into {len(chunks)} chunks")
+
+        processes = []
+        for idx, chunk in enumerate(chunks):
+            print(
+                f"Starting process on cuda-{idx}: {len(chunk)} files to process"
+            )
+            process = torch.multiprocessing.Process(
+                target=batch_transcribe,
+                args=(
+                    chunk,
+                    model,
+                    args.save_dir,
+                    args.bs,
+                    gpu_ids[idx],
+                    args.load_dir,
+                ),
+            )
+            process.start()
+            processes.append(process)
+
+        for process in processes:
+            process.join()
+
+    else:
+        batch_transcribe(
+            file_paths=file_paths,
+            model=model,
+            save_dir=args.save_dir,
+            batch_size=args.bs,
+        )
 
 
 def main():

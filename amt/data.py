@@ -14,7 +14,10 @@ from amt.audio import pad_or_trim
 
 
 def get_wav_mid_segments(
-    audio_path: str, mid_path: str = "", return_json: bool = False
+    audio_path: str,
+    mid_path: str = "",
+    return_json: bool = False,
+    stride_factor: int | None = None,
 ):
     """This function yields tuples of matched log mel spectrograms and
     tokenized sequences (np.array, list). If it is given only an audio path
@@ -22,11 +25,13 @@ def get_wav_mid_segments(
     """
     tokenizer = AmtTokenizer()
     config = load_config()
-    stride_factor = config["data"]["stride_factor"]
     sample_rate = config["audio"]["sample_rate"]
     chunk_len = config["audio"]["chunk_len"]
     num_samples = sample_rate * chunk_len
     samples_per_ms = sample_rate // 1000
+
+    if not stride_factor:
+        stride_factor = config["data"]["stride_factor"]
 
     if not os.path.isfile(audio_path):
         return None

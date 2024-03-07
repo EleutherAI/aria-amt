@@ -113,7 +113,13 @@ class AmtTokenizer(Tokenizer):
             rel_note_end_ms_q = self._quantize_onset(note_end_ms - start_ms)
             velocity_q = self._quantize_velocity(_velocity)
 
-            assert note_start_ms < note_end_ms, "Error"
+            # This shouldn't be needed !
+            if note_start_ms == note_end_ms:
+                continue
+            elif note_start_ms >= note_end_ms:
+                continue
+
+            assert note_start_ms <= note_end_ms, "Error"
             if note_end_ms <= start_ms or note_start_ms >= end_ms:  # Skip
                 continue
             elif (
@@ -263,6 +269,10 @@ class AmtTokenizer(Tokenizer):
                         _pitch = tok_1_data
                         _start_tick, _velocity = note_to_close
                         _end_tick = tok_2_data
+
+                        if _end_tick - _start_tick > 5000:
+                            _end_tick = _start_tick + 5000
+
                         note_msgs.append(
                             {
                                 "type": "note",
@@ -282,6 +292,9 @@ class AmtTokenizer(Tokenizer):
             _pitch = k
             _start_tick, _velocity = v
             _end_tick = len_ms
+
+            if _end_tick - _start_tick > 5000:
+                _end_tick = _start_tick + 5000
 
             note_msgs.append(
                 {
