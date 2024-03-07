@@ -186,14 +186,18 @@ class AudioTransform(torch.nn.Module):
     def __init__(
         self,
         reverb_factor: int = 1,
-        min_snr: int = 10,
-        max_snr: int = 40,
+        min_snr: int = 20,
+        max_snr: int = 50,
+        max_dist_gain: int = 25,
+        min_dist_gain: int = 0,
     ):
         super().__init__()
         self.tokenizer = AmtTokenizer()
         self.reverb_factor = reverb_factor
         self.min_snr = min_snr
         self.max_snr = max_snr
+        self.max_dist_gain = max_dist_gain
+        self.min_dist_gain = min_dist_gain
 
         self.config = load_config()["audio"]
         self.sample_rate = self.config["sample_rate"]
@@ -230,10 +234,10 @@ class AudioTransform(torch.nn.Module):
         )
         self.spec_aug = torch.nn.Sequential(
             torchaudio.transforms.FrequencyMasking(
-                freq_mask_param=15, iid_masks=True
+                freq_mask_param=10, iid_masks=True
             ),
             torchaudio.transforms.TimeMasking(
-                time_mask_param=500, iid_masks=True
+                time_mask_param=1000, iid_masks=True
             ),
         )
 
@@ -309,6 +313,12 @@ class AudioTransform(torch.nn.Module):
 
         return AF.add_noise(waveform=wav, noise=noise, snr=snr_dbs)
 
+    def apply_distortion(self, wav: torch.tensor):
+        gain = random.randint(self.min_dist_gain, self.max_dist_gain)
+        colour = random.randint(5, 95)
+
+        return AF.overdrive(wav, gain=gain, colour=colour)
+
     def shift_spec(self, specs: torch.Tensor, shift: int):
         if shift == 0:
             return specs
@@ -335,7 +345,13 @@ class AudioTransform(torch.nn.Module):
         return shifted_specs
 
     def aug_wav(self, wav: torch.Tensor):
-        return self.apply_reverb(self.apply_noise(wav))
+        # Only apply distortion in 20% of cases
+        if random.random() > 0.20:
+            return self.apply_reverb(self.apply_noise(wav))
+        else:
+            return self.apply_reverb(
+                self.apply_distortion(self.apply_noise(wav))
+            )
 
     def norm_mel(self, mel_spec: torch.Tensor):
         log_spec = torch.clamp(mel_spec, min=1e-10).log10()
@@ -364,8 +380,8 @@ class AudioTransform(torch.nn.Module):
         # Spec & pitch shift
         log_mel = self.log_mel(wav, shift)
 
-        # Spec aug
-        if random.random() > 0.2:
+        # Spec aug in 20% of cases
+        if random.random() > 0.20:
             log_mel = self.spec_aug(log_mel)
 
         return log_mel
