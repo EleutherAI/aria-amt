@@ -119,7 +119,7 @@ def transcribe(args):
     assert os.path.isfile(args.cp), "model checkpoint file not found"
     assert args.load_path or args.load_dir, "must give either load path or dir"
     if args.load_path:
-        assert os.path.isfile(args.load_path), "audio file not found"
+        assert os.path.isfile(args.load_path), f"audio file not found: {args.load_path}"
         trans_mode = "single"
     if args.load_dir:
         assert os.path.isdir(args.load_dir), "load directory doesn't exist"
@@ -201,6 +201,7 @@ def transcribe(args):
             model=model,
             save_dir=args.save_dir,
             batch_size=args.bs,
+            input_dir=args.load_dir,
         )
 
 
