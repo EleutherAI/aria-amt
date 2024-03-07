@@ -56,7 +56,11 @@ def get_wav_mid_segments(
     # Create features
     total_samples = wav.shape[-1]
     res = []
-    for idx in range(0, total_samples, num_samples // stride_factor):
+    for idx in range(
+        0,
+        total_samples - (num_samples - (num_samples // stride_factor)),
+        num_samples // stride_factor,
+    ):
         audio_feature = pad_or_trim(wav[idx:], length=num_samples)
         if midi_dict is not None:
             mid_feature = tokenizer._tokenize_midi_dict(
