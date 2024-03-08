@@ -193,6 +193,7 @@ class AudioTransform(torch.nn.Module):
         # ratios for the reduction of the audio quality
         distort_ratio: float = 0.2,
         reduce_ratio: float = 0.2,
+        spec_aug_ratio: float = 0.2,
     ):
         super().__init__()
         self.tokenizer = AmtTokenizer()
@@ -209,6 +210,7 @@ class AudioTransform(torch.nn.Module):
 
         self.dist_ratio = distort_ratio
         self.reduce_ratio = reduce_ratio
+        self.spec_aug_ratio = spec_aug_ratio
 
         # Audio aug
         impulse_paths = self._get_paths(
@@ -397,17 +399,14 @@ class AudioTransform(torch.nn.Module):
         return log_spec
 
     def forward(self, wav: torch.Tensor, shift: int = 0):
-        # Reverb & noise
+        # noise, distortion, reduction and reverb
         wav = self.aug_wav(wav)
-
-        # Reduction
-        wav = self.apply_reduction(wav)
 
         # Spec & pitch shift
         log_mel = self.log_mel(wav, shift)
 
-        # Spec aug in 20% of cases
-        if random.random() > 0.20:
+        # Spec aug in 20% of the cases
+        if random.random() < self.spec_aug_ratio:
             log_mel = self.spec_aug(log_mel)
 
         return log_mel
