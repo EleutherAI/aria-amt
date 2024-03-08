@@ -189,7 +189,7 @@ def transcribe(
         file_paths = found_mp3 + found_wav
     else:
         file_paths = [load_path]
-        batch_size=1
+        batch_size = 1
 
     if multi_gpu:
         gpu_ids = [
@@ -204,9 +204,7 @@ def transcribe(
 
         processes = []
         for gpu_id in gpu_ids:
-            print(
-                f"Starting process on cuda-{gpu_id}"
-            )
+            print(f"Starting process on cuda-{gpu_id}")
             process = torch.multiprocessing.Process(
                 target=batch_transcribe,
                 args=(

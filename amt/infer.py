@@ -38,7 +38,7 @@ def _setup_logger():
     ch.setFormatter(formatter)
     logger.addHandler(ch)
 
-    return logging.getLogger(__name__)  
+    return logging.getLogger(__name__)
 
 
 def calculate_vel(
@@ -392,7 +392,7 @@ def worker(
 
 
 def batch_transcribe(
-    file_paths, # Queue | list,
+    file_paths,  # Queue | list,
     model: AmtEncoderDecoder,
     save_dir: str,
     batch_size: int = 16,
