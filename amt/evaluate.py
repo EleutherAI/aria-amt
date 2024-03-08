@@ -77,23 +77,28 @@ def evaluate_mir_eval(est_dir, ref_dir, output_stats_file=None, est_shift=0):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(usage="evaluate <command> [<args>]")
-    parser.add_argument("--est-dir", type=str, help="Path to the directory containing the transcribed files")
-    parser.add_argument("--ref-dir", type=str, help="Path to the directory containing the reference files")
+    parser.add_argument(
+        "--est-dir",
+        type=str,
+        help="Path to the directory containing either the transcribed MIDI files or WAV files to be transcribed."
+    )
+    parser.add_argument(
+        "--ref-dir",
+        type=str,
+        help="Path to the directory containing the reference files (we'll use gold MIDI for mir_eval, WAV for dtw)."
+    )
     parser.add_argument(
         '--output-stats-file',
         default=None,
         type=str, help="Path to the file to save the evaluation stats"
     )
 
-    # add mir_eval, mir_eval aug and dtw subparsers
+    # add mir_eval and dtw subparsers
     subparsers = parser.add_subparsers(help="sub-command help")
     mir_eval_parse = subparsers.add_parser("run_mir_eval", help="Run standard mir_eval evaluation on MAESTRO test set.")
     mir_eval_parse.add_argument('--shift', type=int, default=0, help="Shift to apply to the estimated pitches.")
 
-    mir_eval_aug_parse = subparsers.add_parser(
-        "run_mir_eval_aug", help="Run mir_eval evaluation on MAESTRO test set with augmented data."
-    )
-    mir_eval_aug_parse.add_argument('--shift', type=int, default=0, help="Shift to apply to the estimated pitches.")
+    # to come
     dtw_eval_parse = subparsers.add_parser("run_dtw", help="Run dynamic time warping evaluation on a specified dataset.")
 
     args = parser.parse_args()
@@ -101,6 +106,9 @@ if __name__ == "__main__":
         parser.print_help()
         print("Unrecognized command")
         exit(1)
+
+    # todo: should we add an option to run transcription again every time we wish to evaluate? that way, we can run both
+    #  tests with a range of different augmentations right here.
 
     if args.command == "run_mir_eval":
         evaluate_mir_eval(args.est_dir, args.ref_dir, args.output_stats_file, args.shift)
