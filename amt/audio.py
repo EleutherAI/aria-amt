@@ -182,6 +182,7 @@ def log_mel_spectrogram(
     return log_spec
 
 
+# Refactor default params are stored in config.json
 class AudioTransform(torch.nn.Module):
     def __init__(
         self,
@@ -190,10 +191,12 @@ class AudioTransform(torch.nn.Module):
         max_snr: int = 50,
         max_dist_gain: int = 25,
         min_dist_gain: int = 0,
-        # ratios for the reduction of the audio quality
-        distort_ratio: float = 0.2,
-        reduce_ratio: float = 0.2,
-        spec_aug_ratio: float = 0.2,
+        noise_ratio: float = 0.95,
+        reverb_ratio: float = 0.95,
+        applause_ratio: float = 0.01,  # CHANGE
+        distort_ratio: float = 0.15,
+        reduce_ratio: float = 0.01,
+        spec_aug_ratio: float = 0.25,
     ):
         super().__init__()
         self.tokenizer = AmtTokenizer()
@@ -208,9 +211,13 @@ class AudioTransform(torch.nn.Module):
         self.chunk_len = self.config["chunk_len"]
         self.num_samples = self.sample_rate * self.chunk_len
 
-        self.dist_ratio = distort_ratio
+        self.noise_ratio = noise_ratio
+        self.reverb_ratio = reverb_ratio
+        self.applause_ratio = applause_ratio
+        self.distort_ratio = distort_ratio
         self.reduce_ratio = reduce_ratio
         self.spec_aug_ratio = spec_aug_ratio
+        self.reduction_resample_rate = 6000  # Hardcoded?
 
         # Audio aug
         impulse_paths = self._get_paths(
@@ -218,6 +225,9 @@ class AudioTransform(torch.nn.Module):
         )
         noise_paths = self._get_paths(
             os.path.join(os.path.dirname(__file__), "assets", "noise")
+        )
+        applause_paths = self._get_paths(
+            os.path.join(os.path.dirname(__file__), "assets", "applause")
         )
 
         # Register impulses and noises as buffers
@@ -230,6 +240,11 @@ class AudioTransform(torch.nn.Module):
         for i, noise in enumerate(self._get_noise(noise_paths)):
             self.register_buffer(f"noise_{i}", noise)
             self.num_noise += 1
+
+        self.num_applause = 0
+        for i, applause in enumerate(self._get_noise(applause_paths)):
+            self.register_buffer(f"applause_{i}", applause)
+            self.num_applause += 1
 
         self.spec_transform = torchaudio.transforms.Spectrogram(
             n_fft=self.config["n_fft"],
@@ -321,15 +336,37 @@ class AudioTransform(torch.nn.Module):
 
         return AF.add_noise(waveform=wav, noise=noise, snr=snr_dbs)
 
+    def apply_applause(self, wav: torch.tensor):
+        batch_size, _ = wav.shape
+
+        snr_dbs = torch.tensor(
+            [random.randint(1, self.min_snr) for _ in range(batch_size)]
+        ).to(wav.device)
+        applause_type = random.randint(5, self.num_applause - 1)
+
+        applause = getattr(self, f"applause_{applause_type}")
+
+        return AF.add_noise(waveform=wav, noise=applause, snr=snr_dbs)
+
     def apply_reduction(self, wav: torch.tensor):
         """
         Limit the high-band pass filter, the low-band pass filter and the sample rate
         Designed to mimic the effect of recording on a low-quality microphone or phone.
         """
-        wav = AF.highpass_biquad(wav, self.sample_rate, cutoff_freq=1200)
-        wav = AF.lowpass_biquad(wav, self.sample_rate, cutoff_freq=1400)
-        resample_rate = 6000
-        return AF.resample(wav, orig_freq=self.sample_rate, new_freq=resample_rate, lowpass_filter_width=3)
+        wav = AF.highpass_biquad(wav, self.sample_rate, cutoff_freq=300)
+        wav = AF.lowpass_biquad(wav, self.sample_rate, cutoff_freq=3400)
+        wav_downsampled = AF.resample(
+            wav,
+            orig_freq=self.sample_rate,
+            new_freq=self.reduction_resample_rate,
+            lowpass_filter_width=3,
+        )
+
+        return AF.resample(
+            wav_downsampled,
+            self.reduction_resample_rate,
+            self.sample_rate,
+        )
 
     def apply_distortion(self, wav: torch.tensor):
         gain = random.randint(self.min_dist_gain, self.max_dist_gain)
@@ -363,20 +400,23 @@ class AudioTransform(torch.nn.Module):
         return shifted_specs
 
     def aug_wav(self, wav: torch.Tensor):
-        """
-        pipeline for audio augmentation:
-            1. apply noise
-            2. apply distortion (x% of the time)
-            3. apply reduction (x% of the time)
-            4. apply reverb
-        """
+        # Noise
+        if random.random() < self.noise_ratio:
+            wav = self.apply_noise(wav)
+        if random.random() < self.applause_ratio:
+            wav = self.apply_applause(wav)
 
-        wav = self.apply_noise(wav)
-        if random.random() < self.dist_ratio:
-            wav = self.apply_distortion(wav)
+        # Distortion
         if random.random() < self.reduce_ratio:
             wav = self.apply_reduction(wav)
-        return self.apply_reverb(wav)
+        elif random.random() < self.distort_ratio:
+            wav = self.apply_distortion(wav)
+
+        # Reverb
+        if random.random() < self.reverb_ratio:
+            return self.apply_reverb(wav)
+        else:
+            return wav
 
     def norm_mel(self, mel_spec: torch.Tensor):
         log_spec = torch.clamp(mel_spec, min=1e-10).log10()
@@ -399,13 +439,13 @@ class AudioTransform(torch.nn.Module):
         return log_spec
 
     def forward(self, wav: torch.Tensor, shift: int = 0):
-        # noise, distortion, reduction and reverb
+        # Noise, distortion, and reverb
         wav = self.aug_wav(wav)
 
         # Spec & pitch shift
         log_mel = self.log_mel(wav, shift)
 
-        # Spec aug in 20% of the cases
+        # Spec aug
         if random.random() < self.spec_aug_ratio:
             log_mel = self.spec_aug(log_mel)
 

@@ -6,6 +6,7 @@ import mir_eval
 import json
 import os
 
+
 def midi_to_intervals_and_pitches(midi_file_path):
     """
     This function reads a MIDI file and extracts note intervals and pitches
@@ -55,18 +56,26 @@ def evaluate_mir_eval(est_dir, ref_dir, output_stats_file=None, est_shift=0):
         if ref_fpath in ref_midi_files:
             est_ref_pairs.append((est_fpath, ref_fpath))
         if ref_fpath.replace(".mid", ".midi") in ref_midi_files:
-            est_ref_pairs.append((est_fpath, ref_fpath.replace(".mid", ".midi")))
+            est_ref_pairs.append(
+                (est_fpath, ref_fpath.replace(".mid", ".midi"))
+            )
         else:
-            print(f"Reference file not found for {est_fpath} (ref file: {ref_fpath})")
+            print(
+                f"Reference file not found for {est_fpath} (ref file: {ref_fpath})"
+            )
 
-    output_fhandle = open(output_stats_file, "w") if output_stats_file is not None else None
+    output_fhandle = (
+        open(output_stats_file, "w") if output_stats_file is not None else None
+    )
 
     for est_file, ref_file in tqdm(est_ref_pairs):
         ref_intervals, ref_pitches = midi_to_intervals_and_pitches(ref_file)
         est_intervals, est_pitches = midi_to_intervals_and_pitches(est_file)
         ref_pitches_hz = midi_to_hz(ref_pitches)
         est_pitches_hz = midi_to_hz(est_pitches, est_shift)
-        scores = mir_eval.transcription.evaluate(ref_intervals, ref_pitches_hz, est_intervals, est_pitches_hz)
+        scores = mir_eval.transcription.evaluate(
+            ref_intervals, ref_pitches_hz, est_intervals, est_pitches_hz
+        )
         if output_fhandle is not None:
             output_fhandle.write(json.dumps(scores))
             output_fhandle.write("\n")
@@ -76,30 +85,43 @@ def evaluate_mir_eval(est_dir, ref_dir, output_stats_file=None, est_shift=0):
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser(usage="evaluate <command> [<args>]")
     parser.add_argument(
         "--est-dir",
         type=str,
-        help="Path to the directory containing either the transcribed MIDI files or WAV files to be transcribed."
+        help="Path to the directory containing either the transcribed MIDI files or WAV files to be transcribed.",
     )
     parser.add_argument(
         "--ref-dir",
         type=str,
-        help="Path to the directory containing the reference files (we'll use gold MIDI for mir_eval, WAV for dtw)."
+        help="Path to the directory containing the reference files (we'll use gold MIDI for mir_eval, WAV for dtw).",
     )
     parser.add_argument(
-        '--output-stats-file',
+        "--output-stats-file",
         default=None,
-        type=str, help="Path to the file to save the evaluation stats"
+        type=str,
+        help="Path to the file to save the evaluation stats",
     )
 
     # add mir_eval and dtw subparsers
     subparsers = parser.add_subparsers(help="sub-command help")
-    mir_eval_parse = subparsers.add_parser("run_mir_eval", help="Run standard mir_eval evaluation on MAESTRO test set.")
-    mir_eval_parse.add_argument('--shift', type=int, default=0, help="Shift to apply to the estimated pitches.")
+    mir_eval_parse = subparsers.add_parser(
+        "run_mir_eval",
+        help="Run standard mir_eval evaluation on MAESTRO test set.",
+    )
+    mir_eval_parse.add_argument(
+        "--shift",
+        type=int,
+        default=0,
+        help="Shift to apply to the estimated pitches.",
+    )
 
     # to come
-    dtw_eval_parse = subparsers.add_parser("run_dtw", help="Run dynamic time warping evaluation on a specified dataset.")
+    dtw_eval_parse = subparsers.add_parser(
+        "run_dtw",
+        help="Run dynamic time warping evaluation on a specified dataset.",
+    )
 
     args = parser.parse_args()
     if not hasattr(args, "command"):
@@ -112,6 +134,8 @@ if __name__ == "__main__":
     #  -> We expect that baseline methods will fall flat on these, while aria-amt will be OK.
 
     if args.command == "run_mir_eval":
-        evaluate_mir_eval(args.est_dir, args.ref_dir, args.output_stats_file, args.shift)
+        evaluate_mir_eval(
+            args.est_dir, args.ref_dir, args.output_stats_file, args.shift
+        )
     elif args.command == "run_dtw":
         pass
