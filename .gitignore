@@ -1,3 +1,28 @@
+# data files
+*.csv
+*.json
+*.xls
+*.xlsx
+*.pkl
+*.h5
+*.sqlite
+*.db
+*.dbf
+*.shp
+*.shx
+*.prj
+*.cpg
+*.xml
+*.html
+*.htm
+*.mid
+*.midi
+*.wav
+*.mp3
+
+.idea/
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

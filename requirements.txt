@@ -5,3 +5,4 @@ accelerate
 mido
 tqdm
 orjson
+mir_eval
