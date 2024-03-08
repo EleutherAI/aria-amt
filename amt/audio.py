@@ -192,6 +192,7 @@ class AudioTransform(torch.nn.Module):
         max_dist_gain: int = 25,
         min_dist_gain: int = 0,
         noise_ratio: float = 0.95,
+        reverb_ratio: float = 0.95,
         applause_ratio: float = 0.01,  # CHANGE
         distort_ratio: float = 0.15,
         reduce_ratio: float = 0.01,
@@ -211,6 +212,7 @@ class AudioTransform(torch.nn.Module):
         self.num_samples = self.sample_rate * self.chunk_len
 
         self.noise_ratio = noise_ratio
+        self.reverb_ratio = reverb_ratio
         self.applause_ratio = applause_ratio
         self.distort_ratio = distort_ratio
         self.reduce_ratio = reduce_ratio
@@ -401,22 +403,17 @@ class AudioTransform(torch.nn.Module):
         # Noise
         if random.random() < self.noise_ratio:
             wav = self.apply_noise(wav)
-            print("n")
         if random.random() < self.applause_ratio:
-            print("a")
             wav = self.apply_applause(wav)
 
         # Distortion
         if random.random() < self.reduce_ratio:
-            print("r")
             wav = self.apply_reduction(wav)
         elif random.random() < self.distort_ratio:
-            print("d")
             wav = self.apply_distortion(wav)
 
         # Reverb
-        if random.random() < self.reverb_factor:
-            print("r")
+        if random.random() < self.reverb_ratio:
             return self.apply_reverb(wav)
         else:
             return wav
