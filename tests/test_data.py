@@ -173,6 +173,42 @@ class TestAug(unittest.TestCase):
         res = audio_transform.apply_distortion(wav)
         torchaudio.save("tests/test_results/dist.wav", res, SAMPLE_RATE)
 
+    def test_applause(self):
+        SAMPLE_RATE, CHUNK_LEN = 16000, 30
+        audio_transform = AudioTransform()
+        wav, sr = torchaudio.load("tests/test_data/maestro.wav")
+        wav = torchaudio.functional.resample(wav, sr, SAMPLE_RATE).mean(
+            0, keepdim=True
+        )[:, : SAMPLE_RATE * CHUNK_LEN]
+
+        torchaudio.save("tests/test_results/orig.wav", wav, SAMPLE_RATE)
+        res = audio_transform.apply_applause(wav)
+        torchaudio.save("tests/test_results/applause.wav", res, SAMPLE_RATE)
+
+    def test_reduction(self):
+        SAMPLE_RATE, CHUNK_LEN = 16000, 30
+        audio_transform = AudioTransform()
+        wav, sr = torchaudio.load("tests/test_data/maestro.wav")
+        wav = torchaudio.functional.resample(wav, sr, SAMPLE_RATE).mean(
+            0, keepdim=True
+        )[:, : SAMPLE_RATE * CHUNK_LEN]
+
+        torchaudio.save("tests/test_results/orig.wav", wav, SAMPLE_RATE)
+        res = audio_transform.apply_reduction(wav)
+        torchaudio.save("tests/test_results/reduction.wav", res, SAMPLE_RATE)
+
+    def test_noise(self):
+        SAMPLE_RATE, CHUNK_LEN = 16000, 30
+        audio_transform = AudioTransform()
+        wav, sr = torchaudio.load("tests/test_data/maestro.wav")
+        wav = torchaudio.functional.resample(wav, sr, SAMPLE_RATE).mean(
+            0, keepdim=True
+        )[:, : SAMPLE_RATE * CHUNK_LEN]
+
+        torchaudio.save("tests/test_results/orig.wav", wav, SAMPLE_RATE)
+        res = audio_transform.apply_noise(wav)
+        torchaudio.save("tests/test_results/noise.wav", res, SAMPLE_RATE)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -25,19 +25,25 @@ def _add_maestro_args(subparser):
 
 def _add_transcribe_args(subparser):
     subparser.add_argument("model_name", help="name of model config file")
-    subparser.add_argument('checkpoint_path', help="checkpoint path")
-    subparser.add_argument("-load_path", help="path to mp3/wav file", required=False)
+    subparser.add_argument("checkpoint_path", help="checkpoint path")
+    subparser.add_argument(
+        "-load_path", help="path to mp3/wav file", required=False
+    )
     subparser.add_argument(
         "-load_dir", help="dir containing mp3/wav files", required=False
     )
-    subparser.add_argument("-save_dir", help="dir to save midi files", required=True)
+    subparser.add_argument(
+        "-save_dir", help="dir to save midi files", required=True
+    )
     subparser.add_argument(
         "-multi_gpu", help="use all GPUs", action="store_true", default=False
     )
     subparser.add_argument("-bs", help="batch size", type=int, default=16)
 
 
-def build_maestro(maestro_dir, maestro_csv_file, train_file, val_file, test_file, num_procs):
+def build_maestro(
+    maestro_dir, maestro_csv_file, train_file, val_file, test_file, num_procs
+):
     from amt.data import AmtDataset
 
     assert os.path.isdir(maestro_dir), "MAESTRO directory not found"
@@ -101,9 +107,14 @@ def build_maestro(maestro_dir, maestro_csv_file, train_file, val_file, test_file
 
 
 def transcribe(
-        model_name, checkpoint_path, save_dir, load_path=None, load_dir=None,
-        batch_size=16, multi_gpu=False,
-        augment=None,
+    model_name,
+    checkpoint_path,
+    save_dir,
+    load_path=None,
+    load_dir=None,
+    batch_size=16,
+    multi_gpu=False,
+    augment=None,
 ):
     """
     Transcribe audio files to midi using the given model and checkpoint.
@@ -139,9 +150,7 @@ def transcribe(
     assert os.path.isfile(checkpoint_path), "model checkpoint file not found"
     assert load_path or load_dir, "must give either load path or dir"
     if load_path:
-        assert os.path.isfile(
-            load_path
-        ), f"audio file not found: {load_path}"
+        assert os.path.isfile(load_path), f"audio file not found: {load_path}"
         trans_mode = "single"
     if load_dir:
         assert os.path.isdir(load_dir), "load directory doesn't exist"
@@ -232,8 +241,12 @@ def main():
     parser = argparse.ArgumentParser(usage="amt <command> [<args>]")
     subparsers = parser.add_subparsers(help="sub-command help")
     # add maestro and transcribe subparsers
-    subparser_maestro = subparsers.add_parser("maestro", help="Commands to build the maestro dataset.")
-    subparser_transcribe = subparsers.add_parser("transcribe", help="Commands to run transcription.")
+    subparser_maestro = subparsers.add_parser(
+        "maestro", help="Commands to build the maestro dataset."
+    )
+    subparser_transcribe = subparsers.add_parser(
+        "transcribe", help="Commands to run transcription."
+    )
     _add_maestro_args(subparser_maestro)
     _add_transcribe_args(subparser_transcribe)
 

@@ -15,10 +15,6 @@
 *.xml
 *.html
 *.htm
-*.mid
-*.midi
-*.wav
-*.mp3
 
 .idea/
 
