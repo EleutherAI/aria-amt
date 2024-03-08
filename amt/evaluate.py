@@ -37,7 +37,7 @@ def midi_to_hz(note, shift=0):
     """
     # the one used in hFT transformer
     return 440.0 * (2.0 ** (note.astype(int) - shift - 69) / 12)
-    a = 440  # frequency of A (common value is 440Hz)
+    # a = 440  # frequency of A (common value is 440Hz)
     # return (a / 32) * (2 ** ((note - 9) / 12))
 
 
@@ -107,8 +107,11 @@ if __name__ == "__main__":
         print("Unrecognized command")
         exit(1)
 
-    # todo: should we add an option to run transcription again every time we wish to evaluate? that way, we can run both
-    #  tests with a range of different augmentations right here.
+    # todo: should we add an option to run transcription again every time we wish to evaluate?
+    #  that way, we can run both tests with a range of different audio augmentations right here.
+    #  -> We expect that baseline methods will fall flat on these, while aria-amt will be OK.
 
     if args.command == "run_mir_eval":
         evaluate_mir_eval(args.est_dir, args.ref_dir, args.output_stats_file, args.shift)
+    elif args.command == "run_dtw":
+        pass

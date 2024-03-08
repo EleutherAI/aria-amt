@@ -190,6 +190,9 @@ class AudioTransform(torch.nn.Module):
         max_snr: int = 50,
         max_dist_gain: int = 25,
         min_dist_gain: int = 0,
+        # ratios for the reduction of the audio quality
+        distort_ratio: float = 0.2,
+        reduce_ratio: float = 0.2,
     ):
         super().__init__()
         self.tokenizer = AmtTokenizer()
@@ -203,6 +206,9 @@ class AudioTransform(torch.nn.Module):
         self.sample_rate = self.config["sample_rate"]
         self.chunk_len = self.config["chunk_len"]
         self.num_samples = self.sample_rate * self.chunk_len
+
+        self.dist_ratio = distort_ratio
+        self.reduce_ratio = reduce_ratio
 
         # Audio aug
         impulse_paths = self._get_paths(
@@ -313,6 +319,16 @@ class AudioTransform(torch.nn.Module):
 
         return AF.add_noise(waveform=wav, noise=noise, snr=snr_dbs)
 
+    def apply_reduction(self, wav: torch.tensor):
+        """
+        Limit the high-band pass filter, the low-band pass filter and the sample rate
+        Designed to mimic the effect of recording on a low-quality microphone or phone.
+        """
+        wav = AF.highpass_biquad(wav, self.sample_rate, cutoff_freq=1200)
+        wav = AF.lowpass_biquad(wav, self.sample_rate, cutoff_freq=1400)
+        resample_rate = 6000
+        return AF.resample(wav, orig_freq=self.sample_rate, new_freq=resample_rate, lowpass_filter_width=3)
+
     def apply_distortion(self, wav: torch.tensor):
         gain = random.randint(self.min_dist_gain, self.max_dist_gain)
         colour = random.randint(5, 95)
@@ -345,13 +361,20 @@ class AudioTransform(torch.nn.Module):
         return shifted_specs
 
     def aug_wav(self, wav: torch.Tensor):
-        # Only apply distortion in 20% of cases
-        if random.random() > 0.20:
-            return self.apply_reverb(self.apply_noise(wav))
-        else:
-            return self.apply_reverb(
-                self.apply_distortion(self.apply_noise(wav))
-            )
+        """
+        pipeline for audio augmentation:
+            1. apply noise
+            2. apply distortion (x% of the time)
+            3. apply reduction (x% of the time)
+            4. apply reverb
+        """
+
+        wav = self.apply_noise(wav)
+        if random.random() < self.dist_ratio:
+            wav = self.apply_distortion(wav)
+        if random.random() < self.reduce_ratio:
+            wav = self.apply_reduction(wav)
+        return self.apply_reverb(wav)
 
     def norm_mel(self, mel_spec: torch.Tensor):
         log_spec = torch.clamp(mel_spec, min=1e-10).log10()
@@ -376,6 +399,9 @@ class AudioTransform(torch.nn.Module):
     def forward(self, wav: torch.Tensor, shift: int = 0):
         # Reverb & noise
         wav = self.aug_wav(wav)
+
+        # Reduction
+        wav = self.apply_reduction(wav)
 
         # Spec & pitch shift
         log_mel = self.log_mel(wav, shift)
