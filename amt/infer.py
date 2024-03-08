@@ -23,7 +23,6 @@ VEL_TOLERANCE = 50
 
 # TODO: Profile and fix gpu util
 
-
 def calculate_vel(
     logits: torch.Tensor,
     init_vel: int,
@@ -88,7 +87,23 @@ def calculate_onset(
     return tokenizer.tok_to_id[("onset", new_onset)]
 
 
-@torch.autocast("cuda", dtype=torch.bfloat16)
+from functools import wraps
+from torch.cuda import is_bf16_supported
+def optional_bf16_autocast(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        # Assuming 'check_bfloat16_support()' returns True if bfloat16 is supported
+        if is_bf16_supported():
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                return func(*args, **kwargs)
+        else:
+            # Call the function with float16 if bfloat16 is not supported
+            with torch.autocast("cuda", dtype=torch.float16):
+                return func(*args, **kwargs)
+    return wrapper
+
+
+@optional_bf16_autocast
 def process_segments(
     tasks: list,
     model: AmtEncoderDecoder,
