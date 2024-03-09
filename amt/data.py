@@ -116,7 +116,6 @@ class AmtDataset(torch.utils.data.Dataset):
 
         index_path = AmtDataset._get_index_path(load_path=load_path)
         if os.path.isfile(index_path) is True:
-            print("Index file found")
             self.index = self._load_index(load_path=index_path)
         else:
             print("Calculating index...")
