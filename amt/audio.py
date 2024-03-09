@@ -193,10 +193,10 @@ class AudioTransform(torch.nn.Module):
         min_dist_gain: int = 0,
         noise_ratio: float = 0.95,
         reverb_ratio: float = 0.95,
-        applause_ratio: float = 0.01,  # CHANGE
+        applause_ratio: float = 0.01,
         distort_ratio: float = 0.15,
         reduce_ratio: float = 0.01,
-        spec_aug_ratio: float = 0.25,
+        spec_aug_ratio: float = 0.5,
     ):
         super().__init__()
         self.tokenizer = AmtTokenizer()
@@ -257,7 +257,7 @@ class AudioTransform(torch.nn.Module):
         )
         self.spec_aug = torch.nn.Sequential(
             torchaudio.transforms.FrequencyMasking(
-                freq_mask_param=10, iid_masks=True
+                freq_mask_param=15, iid_masks=True
             ),
             torchaudio.transforms.TimeMasking(
                 time_mask_param=1000, iid_masks=True
@@ -371,7 +371,7 @@ class AudioTransform(torch.nn.Module):
     def apply_distortion(self, wav: torch.tensor):
         gain = random.randint(self.min_dist_gain, self.max_dist_gain)
         colour = random.randint(5, 95)
-        
+
         return AF.overdrive(wav, gain=gain, colour=colour)
 
     def distortion_aug_cpu(self, wav: torch.Tensor):
@@ -382,7 +382,7 @@ class AudioTransform(torch.nn.Module):
             wav = self.apply_reduction(wav)
         if random.random() < self.distort_ratio:
             wav = self.apply_distortion(wav)
-        
+
         return wav
 
     def shift_spec(self, specs: torch.Tensor, shift: int):

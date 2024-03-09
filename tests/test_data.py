@@ -154,7 +154,9 @@ class TestAug(unittest.TestCase):
         wav = torchaudio.functional.resample(wav, sr, SAMPLE_RATE).mean(
             0, keepdim=True
         )[:, : SAMPLE_RATE * CHUNK_LEN]
-        wav_aug = audio_transform.aug_wav(audio_transform.distortion_aug_cpu(wav))
+        wav_aug = audio_transform.aug_wav(
+            audio_transform.distortion_aug_cpu(wav)
+        )
         torchaudio.save("tests/test_results/orig.wav", wav, SAMPLE_RATE)
         torchaudio.save("tests/test_results/aug.wav", wav_aug, SAMPLE_RATE)
 

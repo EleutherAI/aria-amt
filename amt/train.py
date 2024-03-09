@@ -562,7 +562,7 @@ def resume_train(
     model_config = ModelConfig(**load_model_config(model_name))
     model_config.set_vocab_size(tokenizer.vocab_size)
     model = AmtEncoderDecoder(model_config)
-    model = torch.compile(model)
+    # model = torch.compile(model)
     audio_transform = AudioTransform().to(accelerator.device)
     logger.info(f"Loaded model with config: {load_model_config(model_name)}")
 
@@ -679,7 +679,7 @@ def train(
     model_config = ModelConfig(**load_model_config(model_name))
     model_config.set_vocab_size(tokenizer.vocab_size)
     model = AmtEncoderDecoder(model_config)
-    model = torch.compile(model)
+    # model = torch.compile(model)
     audio_transform = AudioTransform().to(accelerator.device)
     logger.info(f"Loaded model with config: {load_model_config(model_name)}")
     if mode == "finetune":
