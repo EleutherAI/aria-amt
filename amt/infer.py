@@ -1,6 +1,7 @@
 import os
 import time
 import random
+import logging
 import torch
 import torch.multiprocessing as multiprocessing
 
@@ -21,7 +22,23 @@ ONSET_TOLERANCE = 50
 VEL_TOLERANCE = 50
 
 
-# TODO: Profile and fix gpu util
+def _setup_logger():
+    logger = logging.getLogger(__name__)
+    for h in logger.handlers[:]:
+        logger.removeHandler(h)
+
+    logger.propagate = False
+    logger.setLevel(logging.DEBUG)
+    formatter = logging.Formatter(
+        "[%(asctime)s] %(process)d: [%(levelname)s] %(message)s",
+    )
+
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.INFO)
+    ch.setFormatter(formatter)
+    logger.addHandler(ch)
+
+    return logging.getLogger(__name__)
 
 
 def calculate_vel(
@@ -101,7 +118,7 @@ def optional_bf16_autocast(func):
                 return func(*args, **kwargs)
         else:
             # Call the function with float16 if bfloat16 is not supported
-            with torch.autocast("cuda", dtype=torch.float16):
+            with torch.autocast("cuda", dtype=torch.float32):
                 return func(*args, **kwargs)
 
     return wrapper
@@ -114,6 +131,7 @@ def process_segments(
     audio_transform: AudioTransform,
     tokenizer: AmtTokenizer,
 ):
+    logger = logging.getLogger(__name__)
     audio_segs = torch.stack(
         [audio_seg for (audio_seg, prefix), _ in tasks]
     ).cuda()
@@ -131,14 +149,14 @@ def process_segments(
 
     kv_cache = model.get_empty_cache()
 
-    for idx in (
-        pbar := tqdm(
-            range(min_prefix_len, MAX_SEQ_LEN - 1),
-            total=MAX_SEQ_LEN - (min_prefix_len + 1),
-            leave=False,
-        )
-    ):
-        # for idx in range(min_prefix_len, MAX_SEQ_LEN - 1):
+    # for idx in (
+    #     pbar := tqdm(
+    #         range(min_prefix_len, MAX_SEQ_LEN - 1),
+    #         total=MAX_SEQ_LEN - (min_prefix_len + 1),
+    #         leave=False,
+    #     )
+    # ):
+    for idx in range(min_prefix_len, MAX_SEQ_LEN - 1):
         if idx == min_prefix_len:
             logits = model.decoder(
                 xa=audio_features,
@@ -181,7 +199,7 @@ def process_segments(
             break
 
     if not all(eos_seen):
-        print("WARNING: OVERFLOW")
+        logger.warning("Context length overflow when transcribing segment")
         for _idx in range(seq.shape[0]):
             if eos_seen[_idx] == False:
                 eos_seen[_idx] = MAX_SEQ_LEN
@@ -201,9 +219,9 @@ def gpu_manager(
     batch_size: int,
 ):
     # model.compile()
+    logger = _setup_logger()
     audio_transform = AudioTransform().cuda()
     tokenizer = AmtTokenizer(return_tensors=True)
-    process_pid = multiprocessing.current_process().pid
 
     wait_for_batch = True
     batch = []
@@ -211,9 +229,9 @@ def gpu_manager(
         try:
             task, pid = gpu_task_queue.get(timeout=5)
         except:
-            print(f"{process_pid}: GPU task timeout")
+            logger.info(f"GPU task timeout")
             if len(batch) == 0:
-                print(f"{process_pid}: Finished GPU tasks")
+                logger.info(f"Finished GPU tasks")
                 return
             else:
                 wait_for_batch = False
@@ -274,8 +292,10 @@ def process_file(
     result_queue: Queue,
     tokenizer: AmtTokenizer = AmtTokenizer(),
 ):
-    process_pid = multiprocessing.current_process().pid
-    print(f"{process_pid}: Getting wav segments")
+    logger = logging.getLogger(__name__)
+    pid = multiprocessing.current_process().pid
+
+    logger.info(f"Getting wav segments")
     audio_segments = [
         f
         for f, _ in get_wav_mid_segments(
@@ -288,10 +308,10 @@ def process_file(
         init_idx = len(seq)
 
         # Add to gpu queue and wait for results
-        gpu_task_queue.put(((audio_seg, seq), process_pid))
+        gpu_task_queue.put(((audio_seg, seq), pid))
         while True:
             gpu_result = result_queue.get()
-            if gpu_result["pid"] == process_pid:
+            if gpu_result["pid"] == pid:
                 seq = gpu_result["result"]
                 break
             else:
@@ -307,7 +327,7 @@ def process_file(
         else:
             seq = _truncate_seq(seq, CHUNK_LEN_MS, LEN_MS)
             if len(seq) == 1:
-                print(f"{process_pid}: exiting early")
+                logger.info(f"Exiting early")
                 return res
 
     return res
@@ -336,19 +356,19 @@ def worker(
 
         return save_path
 
-    pid = multiprocessing.current_process().pid
+    logger = _setup_logger()
     tokenizer = AmtTokenizer()
     files_processed = 0
     while not file_queue.empty():
         file_path = file_queue.get()
         save_path = _get_save_path(file_path)
         if os.path.exists(save_path):
-            print(f"{pid}: {save_path} already exists, overwriting")
+            logger.info(f"{save_path} already exists, overwriting")
 
         try:
             res = process_file(file_path, gpu_task_queue, result_queue)
         except Exception as e:
-            print(f"{pid}: Failed to transcribe {file_path}")
+            logger.error(f"Failed to transcribe {file_path}")
             continue
 
         files_processed += 1
@@ -365,14 +385,14 @@ def worker(
             mid = mid_dict.to_midi()
             mid.save(save_path)
         except Exception as e:
-            print(f"{pid}: Failed to detokenize with error {e}")
+            logger.error(f"Failed to detokenize with error {e}")
         else:
-            print(f"{pid}: Finished file {files_processed} - {file_path}")
-            print(f"{pid}: {file_queue.qsize()} file(s) remaining in queue")
+            logger.info(f"Finished file {files_processed} - {file_path}")
+            logger.info(f"{file_queue.qsize()} file(s) remaining in queue")
 
 
 def batch_transcribe(
-    file_paths: list,
+    file_paths,  # Queue | list,
     model: AmtEncoderDecoder,
     save_dir: str,
     batch_size: int = 16,
@@ -384,9 +404,12 @@ def batch_transcribe(
 
     model.cuda()
     model.eval()
-    file_queue = Queue()
-    for file_path in file_paths:
-        file_queue.put(file_path)
+    if isinstance(file_paths, list):
+        file_queue = Queue()
+        for file_path in file_paths:
+            file_queue.put(file_path)
+    else:
+        file_queue = file_paths
 
     gpu_task_queue = Queue()
     result_queue = Queue()

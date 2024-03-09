@@ -140,6 +140,7 @@ def transcribe(
     """
     import torch
     from torch.cuda import is_available as cuda_is_available
+    from torch.multiprocessing import Queue
     from amt.tokenizer import AmtTokenizer
     from amt.infer import batch_transcribe
     from amt.config import load_model_config
@@ -188,35 +189,30 @@ def transcribe(
         file_paths = found_mp3 + found_wav
     else:
         file_paths = [load_path]
+        batch_size = 1
 
     if multi_gpu:
-        # Generate chunks
         gpu_ids = [
             int(id) for id in os.getenv("CUDA_VISIBLE_DEVICES").split(",")
         ]
-        num_gpus = len(gpu_ids)
         print(f"Visible gpu_ids: {gpu_ids}")
 
-        chunk_size = (len(file_paths) // num_gpus) + 1
-        chunks = [
-            file_paths[i : i + chunk_size]
-            for i in range(0, len(file_paths), chunk_size)
-        ]
-        print(f"Split {len(file_paths)} files into {len(chunks)} chunks")
+        # Use shared file queue between gpu processes
+        file_queue = torch.multiprocessing.Queue()
+        for file_path in file_paths:
+            file_queue.put(file_path)
 
         processes = []
-        for idx, chunk in enumerate(chunks):
-            print(
-                f"Starting process on cuda-{idx}: {len(chunk)} files to process"
-            )
+        for gpu_id in gpu_ids:
+            print(f"Starting process on cuda-{gpu_id}")
             process = torch.multiprocessing.Process(
                 target=batch_transcribe,
                 args=(
-                    chunk,
+                    file_queue,
                     model,
                     save_dir,
                     batch_size,
-                    gpu_ids[idx],
+                    gpu_id,
                     load_dir,
                 ),
             )
@@ -237,9 +233,9 @@ def transcribe(
 
 
 def main():
-    # Nested argparse inspired by - https://shorturl.at/kuKW0
-    parser = argparse.ArgumentParser(usage="amt <command> [<args>]")
-    subparsers = parser.add_subparsers(help="sub-command help")
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(help="sub-command help", dest="command")
+
     # add maestro and transcribe subparsers
     subparser_maestro = subparsers.add_parser(
         "maestro", help="Commands to build the maestro dataset."

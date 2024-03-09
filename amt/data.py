@@ -113,7 +113,17 @@ class AmtDataset(torch.utils.data.Dataset):
         self.file_mmap = mmap.mmap(
             self.file_buff.fileno(), 0, access=mmap.ACCESS_READ
         )
-        self.index = self._build_index()
+
+        index_path = AmtDataset._get_index_path(load_path=load_path)
+        if os.path.isfile(index_path) is True:
+            self.index = self._load_index(load_path=index_path)
+        else:
+            print("Calculating index...")
+            self.index = self._build_index()
+            print(
+                f"Index of length {len(self.index)} calculated, saving to {index_path}"
+            )
+            self._save_index(index=self.index, save_path=index_path)
 
     def close(self):
         if self.file_buff:
@@ -167,6 +177,21 @@ class AmtDataset(torch.utils.data.Dataset):
 
         return index
 
+    def _save_index(self, index: list[int], save_path: str):
+        with open(save_path, "w") as file:
+            for idx in index:
+                file.write(f"{idx}\n")
+
+    def _load_index(self, load_path: str):
+        with open(load_path, "r") as file:
+            return [int(line.strip()) for line in file]
+
+    @staticmethod
+    def _get_index_path(load_path: str):
+        return (
+            f"{load_path.rsplit('.', 1)[0]}_index.{load_path.rsplit('.', 1)[1]}"
+        )
+
     @classmethod
     def build(
         cls,
@@ -175,6 +200,12 @@ class AmtDataset(torch.utils.data.Dataset):
         num_processes: int = 1,
     ):
         assert os.path.isfile(save_path) is False, f"{save_path} already exists"
+
+        index_path = AmtDataset._get_index_path(load_path=save_path)
+        if os.path.isfile(index_path):
+            print(f"Removing existing index file at {index_path}")
+            os.remove(AmtDataset._get_index_path(load_path=save_path))
+
         num_paths = len(matched_load_paths)
         with Pool(processes=num_processes) as pool:
             sharded_save_paths = []
@@ -202,3 +233,25 @@ class AmtDataset(torch.utils.data.Dataset):
             os.system(shell_cmd)
             for _path in sharded_save_paths:
                 os.remove(_path)
+
+        # Create index by loading object
+        AmtDataset(load_path=save_path)
+
+    def _build_index(self):
+        self.file_mmap.seek(0)
+        index = []
+        pos = 0
+        while True:
+            pos_buff = pos
+
+            pos = self.file_mmap.find(b"\n", pos)
+            if pos == -1:
+                break
+            pos = self.file_mmap.find(b"\n", pos + 1)
+            if pos == -1:
+                break
+
+            index.append(pos_buff)
+            pos += 1
+
+        return index

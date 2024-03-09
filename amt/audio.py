@@ -193,10 +193,10 @@ class AudioTransform(torch.nn.Module):
         min_dist_gain: int = 0,
         noise_ratio: float = 0.95,
         reverb_ratio: float = 0.95,
-        applause_ratio: float = 0.01,  # CHANGE
+        applause_ratio: float = 0.01,
         distort_ratio: float = 0.15,
         reduce_ratio: float = 0.01,
-        spec_aug_ratio: float = 0.25,
+        spec_aug_ratio: float = 0.5,
     ):
         super().__init__()
         self.tokenizer = AmtTokenizer()
@@ -257,7 +257,7 @@ class AudioTransform(torch.nn.Module):
         )
         self.spec_aug = torch.nn.Sequential(
             torchaudio.transforms.FrequencyMasking(
-                freq_mask_param=10, iid_masks=True
+                freq_mask_param=15, iid_masks=True
             ),
             torchaudio.transforms.TimeMasking(
                 time_mask_param=1000, iid_masks=True
@@ -374,6 +374,17 @@ class AudioTransform(torch.nn.Module):
 
         return AF.overdrive(wav, gain=gain, colour=colour)
 
+    def distortion_aug_cpu(self, wav: torch.Tensor):
+        # This function should run on the cpu (i.e. in the dataloader collate
+        # function) in order to not be a bottlekneck
+
+        if random.random() < self.reduce_ratio:
+            wav = self.apply_reduction(wav)
+        if random.random() < self.distort_ratio:
+            wav = self.apply_distortion(wav)
+
+        return wav
+
     def shift_spec(self, specs: torch.Tensor, shift: int):
         if shift == 0:
             return specs
@@ -400,17 +411,14 @@ class AudioTransform(torch.nn.Module):
         return shifted_specs
 
     def aug_wav(self, wav: torch.Tensor):
+        # This function doesn't apply distortion. If distortion is desired it
+        # should be run before hand on the cpu with distortion_aug_cpu.
+
         # Noise
         if random.random() < self.noise_ratio:
             wav = self.apply_noise(wav)
         if random.random() < self.applause_ratio:
             wav = self.apply_applause(wav)
-
-        # Distortion
-        if random.random() < self.reduce_ratio:
-            wav = self.apply_reduction(wav)
-        elif random.random() < self.distort_ratio:
-            wav = self.apply_distortion(wav)
 
         # Reverb
         if random.random() < self.reverb_ratio:
@@ -439,7 +447,7 @@ class AudioTransform(torch.nn.Module):
         return log_spec
 
     def forward(self, wav: torch.Tensor, shift: int = 0):
-        # Noise, distortion, and reverb
+        # Noise, and reverb
         wav = self.aug_wav(wav)
 
         # Spec & pitch shift
