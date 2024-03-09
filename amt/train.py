@@ -223,7 +223,10 @@ def get_dataloaders(
     # Pitch aug (to the sequence tensors) must be applied in the train
     # dataloader as it needs to be done to every element in the batch equally.
     # Having this code running on the main process was causing a bottlekneck.
+    # Furthermore, distortion runs very slowly on the gpu, so we do it in
+    # the dataloader instead.
     tensor_pitch_aug = AmtTokenizer().export_tensor_pitch_aug()
+    audio_transform = AudioTransform()
 
     def _collate_fn(seqs, max_pitch_shift: int):
         wav, src, tgt = torch.utils.data.default_collate(seqs)
@@ -232,6 +235,9 @@ def get_dataloaders(
         pitch_shift = random.randint(-max_pitch_shift, max_pitch_shift)
         src = tensor_pitch_aug(seq=src, shift=pitch_shift)
         tgt = tensor_pitch_aug(seq=tgt, shift=pitch_shift)
+
+        # Distortion
+        wav = audio_transform.distortion_aug_cpu(wav)
 
         return wav, src, tgt, pitch_shift
 

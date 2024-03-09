@@ -1,6 +1,7 @@
 import unittest
 import logging
 import os
+import time
 import torch
 import torchaudio
 import matplotlib.pyplot as plt
@@ -61,6 +62,7 @@ class TestAmtDataset(unittest.TestCase):
 
         tokenizer = AmtTokenizer()
         dataset = AmtDataset(load_path=MAESTRO_PATH)
+        print(f"Dataset length: {len(dataset)}")
         for idx, (wav, src, tgt) in enumerate(dataset):
             src_dec, tgt_dec = tokenizer.decode(src), tokenizer.decode(tgt)
             if (idx + 1) % 100 == 0:
@@ -152,7 +154,7 @@ class TestAug(unittest.TestCase):
         wav = torchaudio.functional.resample(wav, sr, SAMPLE_RATE).mean(
             0, keepdim=True
         )[:, : SAMPLE_RATE * CHUNK_LEN]
-        wav_aug = audio_transform.aug_wav(wav)
+        wav_aug = audio_transform.aug_wav(audio_transform.distortion_aug_cpu(wav))
         torchaudio.save("tests/test_results/orig.wav", wav, SAMPLE_RATE)
         torchaudio.save("tests/test_results/aug.wav", wav_aug, SAMPLE_RATE)
 
