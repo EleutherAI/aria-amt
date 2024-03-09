@@ -265,6 +265,8 @@ class AudioTransform(torch.nn.Module):
         )
 
     def _get_paths(self, dir_path):
+        os.makedirs(dir_path, exist_ok=True)
+
         return [
             os.path.join(dir_path, f)
             for f in os.listdir(dir_path)
