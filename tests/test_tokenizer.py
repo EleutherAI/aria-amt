@@ -39,6 +39,7 @@ class TestAmtTokenizer(unittest.TestCase):
 
     def test_pitch_aug(self):
         tokenizer = AmtTokenizer(return_tensors=True)
+        tensor_pitch_aug = tokenizer.export_tensor_pitch_aug()
 
         midi_dict_1 = MidiDict.from_midi("tests/test_data/maestro1.mid")
         midi_dict_2 = MidiDict.from_midi("tests/test_data/maestro2.mid")
@@ -61,7 +62,7 @@ class TestAmtTokenizer(unittest.TestCase):
                 tokenizer.encode(seq_3),
             )
         )
-        aug_seqs = tokenizer.pitch_aug(seqs, shift=2)
+        aug_seqs = tensor_pitch_aug(seqs, shift=2)
 
         midi_dict_1_aug = tokenizer._detokenize_midi_dict(
             tokenizer.decode(aug_seqs[0]), 30000
