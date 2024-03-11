@@ -78,9 +78,10 @@ class AmtTokenizer(Tokenizer):
         else:
             return velocity_quantized
 
-    # This method needs to be cleaned up completely, variables renamed
-    # TODO: I need to make this method more robust, as it will have to handle
-    # an arbitrary MIDI file
+    # TODO:
+    # - I need to make this method more robust, as it will have to handle
+    #   an arbitrary MIDI file
+    # - Decide whether to put pedal messages as prev tokens
     def _tokenize_midi_dict(
         self,
         midi_dict: MidiDict,
@@ -93,9 +94,11 @@ class AmtTokenizer(Tokenizer):
 
         midi_dict.resolve_pedal()  # Important !!
         pedal_intervals = midi_dict._build_pedal_intervals()
-        assert len(pedal_intervals.keys()) == 1, "More than one channel"
+        if len(pedal_intervals.keys()) > 1:
+            print("Warning: midi_dict has more than one pedal channel")
         pedal_intervals = pedal_intervals[0]
 
+        last_msg_ms = -1
         on_off_notes = []
         prev_notes = []
         for msg in midi_dict.note_msgs:
@@ -116,6 +119,9 @@ class AmtTokenizer(Tokenizer):
                 tempo_msgs=midi_dict.tempo_msgs,
                 ticks_per_beat=midi_dict.ticks_per_beat,
             )
+
+            if note_end_ms > last_msg_ms:
+                last_msg_ms = note_end_ms
 
             rel_note_start_ms_q = self._quantize_onset(note_start_ms - start_ms)
             rel_note_end_ms_q = self._quantize_onset(note_end_ms - start_ms)
@@ -215,7 +221,12 @@ class AmtTokenizer(Tokenizer):
                     tokenized_seq.append(("onset", _onset))
 
         prefix = [("prev", p) for p in prev_notes]
-        return prefix + [self.bos_tok] + tokenized_seq + [self.eos_tok]
+
+        # Add eos_tok only if segment includes end of midi_dict
+        if last_msg_ms < end_ms:
+            return prefix + [self.bos_tok] + tokenized_seq + [self.eos_tok]
+        else:
+            return prefix + [self.bos_tok] + tokenized_seq
 
     def _detokenize_midi_dict(
         self,
