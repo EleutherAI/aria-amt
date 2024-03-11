@@ -44,7 +44,7 @@ class TestAmtTokenizer(unittest.TestCase):
         cnt = 0
         while True:
             seq = tokenizer._tokenize_midi_dict(
-                midi_dict, start_ms=cnt * 10000, end_ms=(cnt*10000) + 30000
+                midi_dict, start_ms=cnt * 10000, end_ms=(cnt * 10000) + 30000
             )
             if len(seq) <= 2:
                 self.assertEqual(seq[-1], tokenizer.eos_tok)
