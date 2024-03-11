@@ -7,19 +7,22 @@ import torch.multiprocessing as multiprocessing
 
 from torch.multiprocessing import Queue
 from tqdm import tqdm
+from functools import wraps
+from torch.cuda import is_bf16_supported
 
 from amt.model import AmtEncoderDecoder
 from amt.tokenizer import AmtTokenizer
-from amt.audio import AudioTransform
+from amt.audio import AudioTransform, pad_or_trim
 from amt.data import get_wav_mid_segments
+
 
 MAX_SEQ_LEN = 4096
 LEN_MS = 30000
 STRIDE_FACTOR = 3
 CHUNK_LEN_MS = LEN_MS // STRIDE_FACTOR
-BEAM = 3
-ONSET_TOLERANCE = 50
-VEL_TOLERANCE = 50
+BEAM = 5
+ONSET_TOLERANCE = 61
+VEL_TOLERANCE = 100
 
 
 def _setup_logger():
@@ -105,10 +108,6 @@ def calculate_onset(
     return tokenizer.tok_to_id[("onset", new_onset)]
 
 
-from functools import wraps
-from torch.cuda import is_bf16_supported
-
-
 def optional_bf16_autocast(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
@@ -145,7 +144,7 @@ def process_segments(
         tokenizer.trunc_seq(prefix, MAX_SEQ_LEN) for prefix in raw_prefixes
     ]
     seq = torch.stack([tokenizer.encode(prefix) for prefix in prefixes]).cuda()
-    eos_seen = [False for _ in prefixes]
+    end_idxs = [MAX_SEQ_LEN for _ in prefixes]
 
     kv_cache = model.get_empty_cache()
 
@@ -173,7 +172,7 @@ def process_segments(
         next_tok_ids = torch.argmax(logits[:, -1], dim=-1)
 
         for batch_idx in range(logits.shape[0]):
-            if eos_seen[batch_idx] is not False:
+            if idx > end_idxs[batch_idx]:
                 # End already seen, add pad token
                 tok_id = tokenizer.pad_id
             elif idx >= prefix_lens[batch_idx]:
@@ -192,20 +191,24 @@ def process_segments(
                 tok_id = tokenizer.tok_to_id[prefixes[batch_idx][idx]]
 
             seq[batch_idx, idx] = tok_id
-            if tokenizer.id_to_tok[tok_id] == tokenizer.eos_tok:
-                eos_seen[batch_idx] = idx
+            tok = tokenizer.id_to_tok[tok_id]
+            if tok == tokenizer.eos_tok:
+                end_idxs[batch_idx] = idx
+            elif (
+                type(tok) is tuple
+                and tok[0] == "onset"
+                and tok[1] >= LEN_MS - CHUNK_LEN_MS
+            ):
+                end_idxs[batch_idx] = idx - 2
 
-        if all(eos_seen):
+        if all(_idx <= idx for _idx in end_idxs):
             break
 
-    if not all(eos_seen):
+    if not all(_idx <= idx for _idx in end_idxs):
         logger.warning("Context length overflow when transcribing segment")
-        for _idx in range(seq.shape[0]):
-            if eos_seen[_idx] == False:
-                eos_seen[_idx] = MAX_SEQ_LEN
 
     results = [
-        tokenizer.decode(seq[_idx, : eos_seen[_idx] + 1])
+        tokenizer.decode(seq[_idx, : end_idxs[_idx] + 1])
         for _idx in range(seq.shape[0])
     ]
 
@@ -218,7 +221,7 @@ def gpu_manager(
     model: AmtEncoderDecoder,
     batch_size: int,
 ):
-    # model.compile()
+    model.compile()
     logger = _setup_logger()
     audio_transform = AudioTransform().cuda()
     tokenizer = AmtTokenizer(return_tensors=True)
@@ -283,7 +286,7 @@ def _truncate_seq(
         except:
             return ["<S>"]
         else:
-            return res[: res.index(tokenizer.eos_tok)]
+            return res[: res.index(tokenizer.eos_tok)]  # Needs to change
 
 
 def process_file(
@@ -302,8 +305,15 @@ def process_file(
             audio_path=file_path, stride_factor=STRIDE_FACTOR
         )
     ]
-    seq = ["<S>"]
-    res = ["<S>"]
+
+    # Add addtional (padded) final audio segment
+    _last_seg = audio_segments[-1]
+    audio_segments.append(
+        pad_or_trim(_last_seg[len(_last_seg) // STRIDE_FACTOR :])
+    )
+
+    seq = [tokenizer.bos_tok]
+    res = [tokenizer.bos_tok]
     for idx, audio_seg in enumerate(audio_segments):
         init_idx = len(seq)
 
@@ -318,15 +328,18 @@ def process_file(
                 result_queue.put(gpu_result)
 
         res += _shift_onset(
-            seq[init_idx : seq.index(tokenizer.eos_tok)],
+            seq[init_idx:],
             idx * CHUNK_LEN_MS,
         )
 
         if idx == len(audio_segments) - 1:
             break
+        elif res[-1] == tokenizer.eos_tok:
+            logger.info(f"Exiting early")
+            break
         else:
-            seq = _truncate_seq(seq, CHUNK_LEN_MS, LEN_MS)
-            if len(seq) == 1:
+            seq = _truncate_seq(seq, CHUNK_LEN_MS, LEN_MS - CHUNK_LEN_MS)
+            if len(seq) <= 2:
                 logger.info(f"Exiting early")
                 return res
 
@@ -441,3 +454,15 @@ def batch_transcribe(
         p.join()
 
     gpu_manager_process.join()
+
+
+def sample_top_p(probs, p):
+    probs_sort, probs_idx = torch.sort(probs, dim=-1, descending=True)
+    probs_sum = torch.cumsum(probs_sort, dim=-1)
+    mask = probs_sum - probs_sort > p
+    probs_sort[mask] = 0.0
+    probs_sort.div_(probs_sort.sum(dim=-1, keepdim=True))
+    next_token = torch.multinomial(probs_sort, num_samples=1)
+    next_token = torch.gather(probs_idx, -1, next_token)
+
+    return next_token

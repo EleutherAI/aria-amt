@@ -307,14 +307,14 @@ class AmtTokenizer(Tokenizer):
                 )
             elif tok_1_type == "on":
                 if (tok_2_type, tok_3_type) != ("onset", "vel"):
-                    print("Unexpected token order")
+                    print("Unexpected token order:", tok_1, tok_2, tok_3)
                     if DEBUG:
                         raise Exception
                 else:
                     notes_to_close[tok_1_data] = (tok_2_data, tok_3_data)
             elif tok_1_type == "off":
                 if tok_2_type != "onset":
-                    print("Unexpected token order")
+                    print("Unexpected token order:", tok_1, tok_2, tok_3)
                     if DEBUG:
                         raise Exception
                 else:
