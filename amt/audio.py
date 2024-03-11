@@ -197,6 +197,7 @@ class AudioTransform(torch.nn.Module):
         distort_ratio: float = 0.15,
         reduce_ratio: float = 0.01,
         spec_aug_ratio: float = 0.25,
+        codecs_ratio: float = 0.01,
     ):
         super().__init__()
         self.tokenizer = AmtTokenizer()
@@ -217,6 +218,7 @@ class AudioTransform(torch.nn.Module):
         self.distort_ratio = distort_ratio
         self.reduce_ratio = reduce_ratio
         self.spec_aug_ratio = spec_aug_ratio
+        self.codecs_ratio = codecs_ratio
         self.reduction_resample_rate = 6000  # Hardcoded?
 
         # Audio aug
@@ -374,6 +376,21 @@ class AudioTransform(torch.nn.Module):
 
         return AF.overdrive(wav, gain=gain, colour=colour)
 
+    def apply_codec(self, wav: torch.tensor):
+        """
+        Apply different audio codecs to the audio.
+        """
+        format_encoder_pairs = [
+            ("wav", "pcm_mulaw"),
+            ("g722", None),
+            ("ogg", "vorbis")
+        ]
+        for format, encoder in format_encoder_pairs:
+            encoder = torchaudio.io.AudioEffector(format=format, encoder=encoder)
+            if random.random() < self.codecs_ratio:
+                wav = encoder.apply(wav, self.sample_rate)
+        return wav
+
     def shift_spec(self, specs: torch.Tensor, shift: int):
         if shift == 0:
             return specs
@@ -403,6 +420,7 @@ class AudioTransform(torch.nn.Module):
         # Noise
         if random.random() < self.noise_ratio:
             wav = self.apply_noise(wav)
+
         if random.random() < self.applause_ratio:
             wav = self.apply_applause(wav)
 
