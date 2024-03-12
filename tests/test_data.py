@@ -177,6 +177,18 @@ class TestAug(unittest.TestCase):
         res = audio_transform.apply_distortion(wav)
         torchaudio.save("tests/test_results/dist.wav", res, SAMPLE_RATE)
 
+    def test_bandpass(self):
+        SAMPLE_RATE, CHUNK_LEN = 16000, 30
+        audio_transform = AudioTransform()
+        wav, sr = torchaudio.load("tests/test_data/147.wav")
+        wav = torchaudio.functional.resample(wav, sr, SAMPLE_RATE).mean(
+            0, keepdim=True
+        )[:, : SAMPLE_RATE * CHUNK_LEN]
+
+        torchaudio.save("tests/test_results/orig.wav", wav, SAMPLE_RATE)
+        res = audio_transform.apply_bandpass(wav)
+        torchaudio.save("tests/test_results/bandpass.wav", res, SAMPLE_RATE)
+
     def test_applause(self):
         SAMPLE_RATE, CHUNK_LEN = 16000, 30
         audio_transform = AudioTransform()
