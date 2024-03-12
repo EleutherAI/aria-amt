@@ -194,6 +194,7 @@ class AudioTransform(torch.nn.Module):
         noise_ratio: float = 0.95,
         reverb_ratio: float = 0.95,
         applause_ratio: float = 0.01,
+        bandpass_ratio: float = 0.1,
         distort_ratio: float = 0.15,
         reduce_ratio: float = 0.01,
         spec_aug_ratio: float = 0.5,
@@ -214,6 +215,7 @@ class AudioTransform(torch.nn.Module):
         self.noise_ratio = noise_ratio
         self.reverb_ratio = reverb_ratio
         self.applause_ratio = applause_ratio
+        self.bandpass_ratio = bandpass_ratio
         self.distort_ratio = distort_ratio
         self.reduce_ratio = reduce_ratio
         self.spec_aug_ratio = spec_aug_ratio
@@ -350,6 +352,14 @@ class AudioTransform(torch.nn.Module):
 
         return AF.add_noise(waveform=wav, noise=applause, snr=snr_dbs)
 
+    def apply_bandpass(self, wav: torch.tensor):
+        central_freq = random.randint(1000, 3500)
+        Q = random.uniform(0.707, 1.41)
+
+        return torchaudio.functional.bandpass_biquad(
+            wav, self.sample_rate, central_freq, Q
+        )
+
     def apply_reduction(self, wav: torch.tensor):
         """
         Limit the high-band pass filter, the low-band pass filter and the sample rate
@@ -424,9 +434,13 @@ class AudioTransform(torch.nn.Module):
 
         # Reverb
         if random.random() < self.reverb_ratio:
-            return self.apply_reverb(wav)
-        else:
-            return wav
+            wav = self.apply_reverb(wav)
+
+        # EQ
+        if random.random() < self.bandpass_ratio:
+            wav = self.apply_bandpass(wav)
+
+        return wav
 
     def norm_mel(self, mel_spec: torch.Tensor):
         log_spec = torch.clamp(mel_spec, min=1e-10).log10()
