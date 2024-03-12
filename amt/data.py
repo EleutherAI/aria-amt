@@ -6,86 +6,12 @@ import torch
 import torchaudio
 
 from multiprocessing import Pool
+from typing import Callable
 
 from aria.data.midi import MidiDict
 from amt.tokenizer import AmtTokenizer
 from amt.config import load_config
 from amt.audio import pad_or_trim
-from midi2audio import FluidSynth
-import random
-
-
-class SyntheticMidiHandler:
-    def __init__(self, soundfont_path: str, soundfont_prob_dict: dict = None, num_wavs_per_midi: int = 1):
-        """
-        File to load MIDI files and convert them to audio.
-
-        Parameters
-        ----------
-        soundfont_path : str
-            Path to the directory containing soundfont files.
-        soundfont_prob_dict : dict, optional
-            Dictionary containing the probability of using a soundfont file.
-            The keys are the soundfont file names and the values are the
-            probability of using the soundfont file. If none is given, then
-            a uniform distribution is used.
-        num_wavs_per_midi : int, optional
-            Number of audio files to generate per MIDI file.
-        """
-
-        self.soundfont_path = soundfont_path
-        self.soundfont_prob_dict = soundfont_prob_dict
-        self.num_wavs_per_midi = num_wavs_per_midi
-
-        self.fs_objs = self._load_soundfonts()
-        self.soundfont_cumul_prob_dict = self._get_cumulative_prob_dict()
-
-    def _load_soundfonts(self):
-        """Loads the soundfonts into fluidsynth objects."""
-        fs_files = os.listdir(self.soundfont_path)
-        fs_objs = {}
-        for fs_file in fs_files:
-            fs_objs[fs_file] = FluidSynth(fs_file)
-        return fs_objs
-
-    def _get_cumulative_prob_dict(self):
-        """Returns a dictionary with the cumulative probabilities of the soundfonts.
-        Used for sampling the soundfonts.
-        """
-        if self.soundfont_prob_dict is None:
-            self.soundfont_prob_dict = {k: 1 / len(self.fs_objs) for k in self.fs_objs.keys()}
-        self.soundfont_prob_dict = {k: v / sum(self.soundfont_prob_dict.values())
-                                    for k, v in self.soundfont_prob_dict.items()}
-        cumul_prob_dict = {}
-        cumul_prob = 0
-        for k, v in self.soundfont_prob_dict.items():
-            cumul_prob_dict[k] = (cumul_prob, cumul_prob + v)
-            cumul_prob += v
-        return cumul_prob_dict
-
-    def _sample_soundfont(self):
-        """Samples a soundfont file."""
-        rand_num = random.random()
-        for k, (v_s, v_e) in self.soundfont_cumul_prob_dict.items():
-            if (rand_num >= v_s) and (rand_num < v_e):
-                return self.fs_objs[k]
-
-    def get_wav(self, midi_path: str, save_path: str):
-        """
-        Converts a MIDI file to audio.
-
-        Parameters
-        ----------
-        midi_path : str
-            Path to the MIDI file.
-        save_path : str
-            Path to save the audio file.
-        """
-        for i in range(self.num_wavs_per_midi):
-            soundfont = self._sample_soundfont()
-            if self.num_wavs_per_midi > 1:
-                save_path = save_path[:-4] + f"_{i}.wav"
-            soundfont.midi_to_audio(midi_path, save_path)
 
 
 def get_wav_mid_segments(
@@ -161,6 +87,49 @@ def write_features(args):
         mid_path=mid_path,
         return_json=False,
     )
+    dirname, basename = os.path.split(save_path)
+    proc_save_path = os.path.join(dirname, str(os.getpid()) + basename)
+
+    with open(proc_save_path, mode="ab") as file:
+        for wav, seq in features:
+            file.write(
+                orjson.dumps(
+                    wav.numpy(),
+                    option=orjson.OPT_SERIALIZE_NUMPY,
+                )
+            )
+            file.write(b"\n")
+            file.write(orjson.dumps(seq))
+            file.write(b"\n")
+
+    return proc_save_path
+
+
+def get_synth_audio(cli_cmd_fn: str, mid_path: str, wav_path: str):
+    _cmd = cli_cmd_fn(mid_path, wav_path)
+    os.system(_cmd)
+
+
+def write_synthetic_features(args):
+    cli_cmd_fn, mid_path, save_path = args
+    audio_path_temp = f"{os.getpid()}_temp.wav"
+
+    try:
+        get_synth_audio(
+            cli_cmd=cli_cmd_fn, mid_path=mid_path, wav_path=save_path
+        )
+    except:
+        if os.path.isfile(audio_path_temp):
+            os.remove(audio_path_temp)
+        return
+    else:
+        features = get_wav_mid_segments(
+            audio_path=audio_path_temp,
+            mid_path=mid_path,
+            return_json=False,
+        )
+        os.remove(audio_path_temp)
+
     dirname, basename = os.path.split(save_path)
     proc_save_path = os.path.join(dirname, str(os.getpid()) + basename)
 
@@ -267,6 +236,25 @@ class AmtDataset(torch.utils.data.Dataset):
             f"{load_path.rsplit('.', 1)[0]}_index.{load_path.rsplit('.', 1)[1]}"
         )
 
+    def _build_index(self):
+        self.file_mmap.seek(0)
+        index = []
+        pos = 0
+        while True:
+            pos_buff = pos
+
+            pos = self.file_mmap.find(b"\n", pos)
+            if pos == -1:
+                break
+            pos = self.file_mmap.find(b"\n", pos + 1)
+            if pos == -1:
+                break
+
+            index.append(pos_buff)
+            pos += 1
+
+        return index
+
     @classmethod
     def build(
         cls,
@@ -312,21 +300,57 @@ class AmtDataset(torch.utils.data.Dataset):
         # Create index by loading object
         AmtDataset(load_path=save_path)
 
-    def _build_index(self):
-        self.file_mmap.seek(0)
-        index = []
-        pos = 0
-        while True:
-            pos_buff = pos
+    @classmethod
+    def build_synth(
+        cls,
+        midi_paths: list[str],
+        cli_cmd_fn: Callable,
+        save_path: str,
+        num_processes: int = 1,
+    ):
+        """cli_cmd_fn is expected to be a function with arguments
 
-            pos = self.file_mmap.find(b"\n", pos)
-            if pos == -1:
-                break
-            pos = self.file_mmap.find(b"\n", pos + 1)
-            if pos == -1:
-                break
+        mid_path (str): Path to a MIDI file.
+        wav_path (str): Path to save WAV file.
 
-            index.append(pos_buff)
-            pos += 1
+        Which returns a cli command that when executed, will generate and save
+        a wav file to wav_path.
+        """
 
-        return index
+        assert os.path.isfile(save_path) is False, f"{save_path} already exists"
+
+        index_path = AmtDataset._get_index_path(load_path=save_path)
+        if os.path.isfile(index_path):
+            print(f"Removing existing index file at {index_path}")
+            os.remove(AmtDataset._get_index_path(load_path=save_path))
+
+        num_paths = len(midi_paths)
+        with Pool(processes=num_processes) as pool:
+            sharded_save_paths = []
+            res = pool.imap_unordered(
+                write_synthetic_features,
+                ((cli_cmd_fn, mid_path, save_path) for mid_path in midi_paths),
+            )
+            for idx, proc_save_path in enumerate(res):
+                if idx % 10 == 0 and idx != 0:
+                    print(f"Finished {idx}/{num_paths}")
+                if proc_save_path not in sharded_save_paths:
+                    sharded_save_paths.append(proc_save_path)
+
+        # This is bad, however cat is fast
+        if shutil.which("cat") is None:
+            print("The GNU cat command is not available")
+        else:
+            print("Concatinating sharded dataset files")
+            shell_cmd = f"cat "
+            for _path in sharded_save_paths:
+                shell_cmd += f"{_path} "
+                print()
+            shell_cmd += f">> {save_path}"
+
+            os.system(shell_cmd)
+            for _path in sharded_save_paths:
+                os.remove(_path)
+
+        # Create index by loading object
+        AmtDataset(load_path=save_path)
