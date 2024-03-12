@@ -147,6 +147,36 @@ class TestAug(unittest.TestCase):
         for src_tok, tgt_tok in zip(src_aug_dec[1:], tgt_aug_dec):
             self.assertEqual(src_tok, tgt_tok)
 
+    def test_detune(self):
+        SAMPLE_RATE, CHUNK_LEN = 16000, 30
+        audio_transform = AudioTransform()
+        wav, sr = torchaudio.load("tests/test_data/maestro.wav")
+        wav = torchaudio.functional.resample(wav, sr, SAMPLE_RATE).mean(
+            0, keepdim=True
+        )[:, : SAMPLE_RATE * CHUNK_LEN]
+
+        griffin_lim = torchaudio.transforms.GriffinLim(
+            n_fft=2048,
+            hop_length=160,
+            power=1,
+            n_iter=64,
+        )
+
+        spec = audio_transform.spec_transform(wav)
+        shift_spec = audio_transform.detune_spec(spec)
+        shift_wav = griffin_lim(shift_spec)
+        gl_wav = griffin_lim(spec)
+        torchaudio.save("tests/test_results/orig.wav", wav, SAMPLE_RATE)
+        torchaudio.save("tests/test_results/orig_gl.wav", gl_wav, SAMPLE_RATE)
+        torchaudio.save("tests/test_results/detune.wav", shift_wav, SAMPLE_RATE)
+
+        log_mel = log_mel_spectrogram(wav)
+        self.plot_spec(log_mel.squeeze(0), "orig")
+
+        _mel = audio_transform.mel_transform(spec)
+        _log_mel = audio_transform.norm_mel(_mel)
+        self.plot_spec(_log_mel.squeeze(0), "new")
+
     def test_mels(self):
         SAMPLE_RATE, CHUNK_LEN = 16000, 30
         audio_transform = AudioTransform()
