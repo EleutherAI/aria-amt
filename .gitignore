@@ -15,9 +15,11 @@
 *.xml
 *.html
 *.htm
+*.sf2
 
 .idea/
-
+notebooks/scratch
+baselines/hft_transformer/model_files/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
