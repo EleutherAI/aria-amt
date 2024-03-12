@@ -11,6 +11,81 @@ from aria.data.midi import MidiDict
 from amt.tokenizer import AmtTokenizer
 from amt.config import load_config
 from amt.audio import pad_or_trim
+from midi2audio import FluidSynth
+import random
+
+
+class SyntheticMidiHandler:
+    def __init__(self, soundfont_path: str, soundfont_prob_dict: dict = None, num_wavs_per_midi: int = 1):
+        """
+        File to load MIDI files and convert them to audio.
+
+        Parameters
+        ----------
+        soundfont_path : str
+            Path to the directory containing soundfont files.
+        soundfont_prob_dict : dict, optional
+            Dictionary containing the probability of using a soundfont file.
+            The keys are the soundfont file names and the values are the
+            probability of using the soundfont file. If none is given, then
+            a uniform distribution is used.
+        num_wavs_per_midi : int, optional
+            Number of audio files to generate per MIDI file.
+        """
+
+        self.soundfont_path = soundfont_path
+        self.soundfont_prob_dict = soundfont_prob_dict
+        self.num_wavs_per_midi = num_wavs_per_midi
+
+        self.fs_objs = self._load_soundfonts()
+        self.soundfont_cumul_prob_dict = self._get_cumulative_prob_dict()
+
+    def _load_soundfonts(self):
+        """Loads the soundfonts into fluidsynth objects."""
+        fs_files = os.listdir(self.soundfont_path)
+        fs_objs = {}
+        for fs_file in fs_files:
+            fs_objs[fs_file] = FluidSynth(fs_file)
+        return fs_objs
+
+    def _get_cumulative_prob_dict(self):
+        """Returns a dictionary with the cumulative probabilities of the soundfonts.
+        Used for sampling the soundfonts.
+        """
+        if self.soundfont_prob_dict is None:
+            self.soundfont_prob_dict = {k: 1 / len(self.fs_objs) for k in self.fs_objs.keys()}
+        self.soundfont_prob_dict = {k: v / sum(self.soundfont_prob_dict.values())
+                                    for k, v in self.soundfont_prob_dict.items()}
+        cumul_prob_dict = {}
+        cumul_prob = 0
+        for k, v in self.soundfont_prob_dict.items():
+            cumul_prob_dict[k] = (cumul_prob, cumul_prob + v)
+            cumul_prob += v
+        return cumul_prob_dict
+
+    def _sample_soundfont(self):
+        """Samples a soundfont file."""
+        rand_num = random.random()
+        for k, (v_s, v_e) in self.soundfont_cumul_prob_dict.items():
+            if (rand_num >= v_s) and (rand_num < v_e):
+                return self.fs_objs[k]
+
+    def get_wav(self, midi_path: str, save_path: str):
+        """
+        Converts a MIDI file to audio.
+
+        Parameters
+        ----------
+        midi_path : str
+            Path to the MIDI file.
+        save_path : str
+            Path to save the audio file.
+        """
+        for i in range(self.num_wavs_per_midi):
+            soundfont = self._sample_soundfont()
+            if self.num_wavs_per_midi > 1:
+                save_path = save_path[:-4] + f"_{i}.wav"
+            soundfont.midi_to_audio(midi_path, save_path)
 
 
 def get_wav_mid_segments(
