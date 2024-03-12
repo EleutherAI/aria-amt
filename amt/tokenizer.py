@@ -46,7 +46,7 @@ class AmtTokenizer(Tokenizer):
         self.prev_tokens = [("prev", i) for i in range(128)]
         self.note_on_tokens = [("on", i) for i in range(128)]
         self.note_off_tokens = [("off", i) for i in range(128)]
-        self.pedal_tokens = [("pedal", 0), (("pedal", 1))]
+        self.pedal_tokens = [("pedal", 0), ("pedal", 1), ("prev", "pedal")]
         self.velocity_tokens = [("vel", i) for i in self.velocity_quantizations]
         self.onset_tokens = [
             ("onset", i) for i in self.onset_time_quantizations
@@ -81,7 +81,6 @@ class AmtTokenizer(Tokenizer):
     # TODO:
     # - I need to make this method more robust, as it will have to handle
     #   an arbitrary MIDI file
-    # - Decide whether to put pedal messages as prev tokens
     def _tokenize_midi_dict(
         self,
         midi_dict: MidiDict,
@@ -96,11 +95,13 @@ class AmtTokenizer(Tokenizer):
         pedal_intervals = midi_dict._build_pedal_intervals()
         if len(pedal_intervals.keys()) > 1:
             print("Warning: midi_dict has more than one pedal channel")
+        if len(midi_dict.instrument_msgs) > 1:
+            print("Warning: midi_dict has more than one instrument msg")
         pedal_intervals = pedal_intervals[0]
 
         last_msg_ms = -1
         on_off_notes = []
-        prev_notes = []
+        prev_toks = []
         for msg in midi_dict.note_msgs:
             _pitch = msg["data"]["pitch"]
             _velocity = msg["data"]["velocity"]
@@ -137,9 +138,9 @@ class AmtTokenizer(Tokenizer):
             if note_end_ms <= start_ms or note_start_ms >= end_ms:  # Skip
                 continue
             elif (
-                note_start_ms < start_ms and _pitch not in prev_notes
+                note_start_ms < start_ms and _pitch not in prev_toks
             ):  # Add to prev notes
-                prev_notes.append(_pitch)
+                prev_toks.append(_pitch)
                 if note_end_ms < end_ms:
                     on_off_notes.append(
                         ("off", _pitch, rel_note_end_ms_q, None)
@@ -182,8 +183,10 @@ class AmtTokenizer(Tokenizer):
             rel_off_ms_q = self._quantize_onset(pedal_off_ms - start_ms)
 
             # On message
-            if pedal_on_ms <= start_ms or pedal_on_ms >= end_ms:
+            if pedal_off_ms <= start_ms or pedal_on_ms >= end_ms:
                 continue
+            elif pedal_on_ms < start_ms and pedal_off_ms >= start_ms:
+                prev_toks.append("pedal")
             else:
                 on_off_pedal.append(("pedal", 1, rel_on_ms_q, None))
 
@@ -200,7 +203,7 @@ class AmtTokenizer(Tokenizer):
                 (0 if x[0] == "pedal" else 1 if x[0] == "off" else 2),
             )
         )
-        random.shuffle(prev_notes)
+        random.shuffle(prev_toks)
 
         tokenized_seq = []
         for tok in on_off_combined:
@@ -220,7 +223,7 @@ class AmtTokenizer(Tokenizer):
                     tokenized_seq.append(("pedal", _val))
                     tokenized_seq.append(("onset", _onset))
 
-        prefix = [("prev", p) for p in prev_notes]
+        prefix = [("prev", p) for p in prev_toks]
 
         # Add eos_tok only if segment includes end of midi_dict
         if last_msg_ms < end_ms:
@@ -271,7 +274,21 @@ class AmtTokenizer(Tokenizer):
                     if DEBUG:
                         raise Exception
 
-                notes_to_close[tok[1]] = (0, self.default_velocity)
+                if tok[1] == "pedal":
+                    pedal_msgs.append(
+                        {
+                            "type": "pedal",
+                            "data": 1,
+                            "tick": 0,
+                            "channel": 0,
+                        }
+                    )
+                elif isinstance(tok[1], int):
+                    notes_to_close[tok[1]] = (0, self.default_velocity)
+                else:
+                    print(f"Invalid 'prev' token: {tok}")
+                    if DEBUG:
+                        raise Exception
             else:
                 raise Exception(
                     f"Invalid note sequence at position {idx}: {tok, tokenized_seq[:idx]}"
@@ -293,11 +310,9 @@ class AmtTokenizer(Tokenizer):
                 if DEBUG:
                     raise Exception
             elif tok_1_type == "pedal":
-                # Pedal information contained in note-off messages, so we don't
-                # need to manually processes them
                 _pedal_data = tok_1_data
                 _tick = tok_2_data
-                note_msgs.append(
+                pedal_msgs.append(
                     {
                         "type": "pedal",
                         "data": _pedal_data,
@@ -454,13 +469,11 @@ class AmtTokenizer(Tokenizer):
 
             # Shuffle order and re-append to result
             for k, v in sorted(buffer.items()):
+                off_pedal_combined = v["off"] + v["pedal"]
+                random.shuffle(off_pedal_combined)
                 random.shuffle(v["on"])
-                random.shuffle(v["off"])
-                for item in v["pedal"]:
-                    res.append(item[0])  # Pedal
-                    res.append(item[1])  # Onset
-                for item in v["off"]:
-                    res.append(item[0])  # Pitch
+                for item in off_pedal_combined:
+                    res.append(item[0])  # Off or pedal
                     res.append(item[1])  # Onset
                 for item in v["on"]:
                     res.append(item[0])  # Pitch

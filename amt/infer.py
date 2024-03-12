@@ -283,10 +283,13 @@ def _truncate_seq(
         _mid_dict = tokenizer._detokenize_midi_dict(seq, LEN_MS)
         try:
             res = tokenizer._tokenize_midi_dict(_mid_dict, start_ms, end_ms - 1)
-        except:
+        except Exception:
+            print("Truncate failed")
             return ["<S>"]
         else:
-            return res[: res.index(tokenizer.eos_tok)]  # Needs to change
+            if res[-1] == tokenizer.eos_tok:
+                res.pop()
+            return res
 
 
 def process_file(
@@ -306,14 +309,9 @@ def process_file(
         )
     ]
 
-    # Add addtional (padded) final audio segment
-    _last_seg = audio_segments[-1]
-    audio_segments.append(
-        pad_or_trim(_last_seg[len(_last_seg) // STRIDE_FACTOR :])
-    )
-
+    res = []
     seq = [tokenizer.bos_tok]
-    res = [tokenizer.bos_tok]
+    concat_seq = [tokenizer.bos_tok]
     for idx, audio_seg in enumerate(audio_segments):
         init_idx = len(seq)
 
@@ -327,21 +325,25 @@ def process_file(
             else:
                 result_queue.put(gpu_result)
 
-        res += _shift_onset(
+        concat_seq += _shift_onset(
             seq[init_idx:],
             idx * CHUNK_LEN_MS,
         )
 
         if idx == len(audio_segments) - 1:
-            break
-        elif res[-1] == tokenizer.eos_tok:
-            logger.info(f"Exiting early")
-            break
+            res.append(concat_seq)
+        elif concat_seq[-1] == tokenizer.eos_tok:
+            res.append(concat_seq)
+            seq = [tokenizer.bos_tok]
+            concat_seq = [tokenizer.bos_tok]
+            logger.info(f"Finished segment - eos_tok seen")
         else:
             seq = _truncate_seq(seq, CHUNK_LEN_MS, LEN_MS - CHUNK_LEN_MS)
-            if len(seq) <= 2:
-                logger.info(f"Exiting early")
-                return res
+            if len(seq) == 1:
+                res.append(concat_seq)
+                seq = [tokenizer.bos_tok]
+                concat_seq = [tokenizer.bos_tok]
+                logger.info(f"Exiting early - silence")
 
     return res
 
@@ -353,16 +355,35 @@ def worker(
     save_dir: str,
     input_dir: str | None = None,
 ):
-    def _get_save_path(_file_path: str):
+    def _save_seq(_seq: list, _save_path: str):
+        if os.path.exists(_save_path):
+            logger.info(f"Already exists {_save_path} - overwriting")
+
+        for tok in _seq[::-1]:
+            if type(tok) is tuple and tok[0] == "onset":
+                last_onset = tok[1]
+                break
+
+        try:
+            mid_dict = tokenizer._detokenize_midi_dict(
+                tokenized_seq=_seq, len_ms=last_onset
+            )
+            mid = mid_dict.to_midi()
+            mid.save(_save_path)
+        except Exception as e:
+            logger.error(f"Failed to save {_save_path}")
+
+    def _get_save_path(_file_path: str, _idx: int | str = ""):
         if input_dir is None:
             save_path = os.path.join(
                 save_dir,
-                os.path.splitext(os.path.basename(file_path))[0] + ".mid",
+                os.path.splitext(os.path.basename(file_path))[0]
+                + f"{_idx}.mid",
             )
         else:
             input_rel_path = os.path.relpath(_file_path, input_dir)
             save_path = os.path.join(
-                save_dir, os.path.splitext(input_rel_path)[0] + ".mid"
+                save_dir, os.path.splitext(input_rel_path)[0] + f"{_idx}.mid"
             )
             if not os.path.isdir(os.path.dirname(save_path)):
                 os.makedirs(os.path.dirname(save_path), exist_ok=True)
@@ -374,34 +395,20 @@ def worker(
     files_processed = 0
     while not file_queue.empty():
         file_path = file_queue.get()
-        save_path = _get_save_path(file_path)
-        if os.path.exists(save_path):
-            logger.info(f"{save_path} already exists, overwriting")
 
         try:
-            res = process_file(file_path, gpu_task_queue, result_queue)
+            seqs = process_file(file_path, gpu_task_queue, result_queue)
         except Exception as e:
-            logger.error(f"Failed to transcribe {file_path}")
+            logger.error(f"Failed to process {file_path}")
             continue
 
+        logger.info(f"Transcribed into {len(seqs)} segment(s)")
+        for _idx, seq in enumerate(seqs):
+            _save_seq(seq, _get_save_path(file_path, _idx))
+
         files_processed += 1
-
-        for tok in res[::-1]:
-            if type(tok) is tuple and tok[0] == "onset":
-                last_onset = tok[1]
-                break
-
-        try:
-            mid_dict = tokenizer._detokenize_midi_dict(
-                tokenized_seq=res, len_ms=last_onset
-            )
-            mid = mid_dict.to_midi()
-            mid.save(save_path)
-        except Exception as e:
-            logger.error(f"Failed to detokenize with error {e}")
-        else:
-            logger.info(f"Finished file {files_processed} - {file_path}")
-            logger.info(f"{file_queue.qsize()} file(s) remaining in queue")
+        logger.info(f"Finished file {files_processed} - {file_path}")
+        logger.info(f"{file_queue.qsize()} file(s) remaining in queue")
 
 
 def batch_transcribe(
