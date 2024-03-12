@@ -46,6 +46,7 @@ class AmtTokenizer(Tokenizer):
         self.prev_tokens = [("prev", i) for i in range(128)]
         self.note_on_tokens = [("on", i) for i in range(128)]
         self.note_off_tokens = [("off", i) for i in range(128)]
+        self.pedal_tokens = [("pedal", 0), ("pedal", 1), ("prev", "pedal")]
         self.velocity_tokens = [("vel", i) for i in self.velocity_quantizations]
         self.onset_tokens = [
             ("onset", i) for i in self.onset_time_quantizations
@@ -56,6 +57,7 @@ class AmtTokenizer(Tokenizer):
             + self.prev_tokens
             + self.note_on_tokens
             + self.note_off_tokens
+            + self.pedal_tokens
             + self.velocity_tokens
             + self.onset_tokens
         )
@@ -76,7 +78,9 @@ class AmtTokenizer(Tokenizer):
         else:
             return velocity_quantized
 
-    # This method needs to be cleaned up completely, variables renamed
+    # TODO:
+    # - I need to make this method more robust, as it will have to handle
+    #   an arbitrary MIDI file
     def _tokenize_midi_dict(
         self,
         midi_dict: MidiDict,
@@ -88,8 +92,16 @@ class AmtTokenizer(Tokenizer):
         ), "Invalid values for start_ms, end_ms"
 
         midi_dict.resolve_pedal()  # Important !!
+        pedal_intervals = midi_dict._build_pedal_intervals()
+        if len(pedal_intervals.keys()) > 1:
+            print("Warning: midi_dict has more than one pedal channel")
+        if len(midi_dict.instrument_msgs) > 1:
+            print("Warning: midi_dict has more than one instrument msg")
+        pedal_intervals = pedal_intervals[0]
+
+        last_msg_ms = -1
         on_off_notes = []
-        prev_notes = []
+        prev_toks = []
         for msg in midi_dict.note_msgs:
             _pitch = msg["data"]["pitch"]
             _velocity = msg["data"]["velocity"]
@@ -109,6 +121,9 @@ class AmtTokenizer(Tokenizer):
                 ticks_per_beat=midi_dict.ticks_per_beat,
             )
 
+            if note_end_ms > last_msg_ms:
+                last_msg_ms = note_end_ms
+
             rel_note_start_ms_q = self._quantize_onset(note_start_ms - start_ms)
             rel_note_end_ms_q = self._quantize_onset(note_end_ms - start_ms)
             velocity_q = self._quantize_velocity(_velocity)
@@ -123,9 +138,9 @@ class AmtTokenizer(Tokenizer):
             if note_end_ms <= start_ms or note_start_ms >= end_ms:  # Skip
                 continue
             elif (
-                note_start_ms < start_ms and _pitch not in prev_notes
+                note_start_ms < start_ms and _pitch not in prev_toks
             ):  # Add to prev notes
-                prev_notes.append(_pitch)
+                prev_toks.append(_pitch)
                 if note_end_ms < end_ms:
                     on_off_notes.append(
                         ("off", _pitch, rel_note_end_ms_q, None)
@@ -149,35 +164,72 @@ class AmtTokenizer(Tokenizer):
                         ("off", _pitch, rel_note_end_ms_q, None)
                     )
 
-        on_off_notes.sort(key=lambda x: (x[2], x[0] == "on"))
-        random.shuffle(prev_notes)
+        on_off_pedal = []
+        for pedal_on_tick, pedal_off_tick in pedal_intervals:
+            pedal_on_ms = get_duration_ms(
+                start_tick=0,
+                end_tick=pedal_on_tick,
+                tempo_msgs=midi_dict.tempo_msgs,
+                ticks_per_beat=midi_dict.ticks_per_beat,
+            )
+            pedal_off_ms = get_duration_ms(
+                start_tick=0,
+                end_tick=pedal_off_tick,
+                tempo_msgs=midi_dict.tempo_msgs,
+                ticks_per_beat=midi_dict.ticks_per_beat,
+            )
+
+            rel_on_ms_q = self._quantize_onset(pedal_on_ms - start_ms)
+            rel_off_ms_q = self._quantize_onset(pedal_off_ms - start_ms)
+
+            # On message
+            if pedal_off_ms <= start_ms or pedal_on_ms >= end_ms:
+                continue
+            elif pedal_on_ms < start_ms and pedal_off_ms >= start_ms:
+                prev_toks.append("pedal")
+            else:
+                on_off_pedal.append(("pedal", 1, rel_on_ms_q, None))
+
+            # Off message
+            if pedal_off_ms <= start_ms or pedal_off_ms >= end_ms:
+                continue
+            else:
+                on_off_pedal.append(("pedal", 0, rel_off_ms_q, None))
+
+        on_off_combined = on_off_notes + on_off_pedal
+        on_off_combined.sort(
+            key=lambda x: (
+                x[2],
+                (0 if x[0] == "pedal" else 1 if x[0] == "off" else 2),
+            )
+        )
+        random.shuffle(prev_toks)
 
         tokenized_seq = []
-        note_status = {}
-        for pitch in prev_notes:
-            note_status[pitch] = True
-        for note in on_off_notes:
-            _type, _pitch, _onset, _velocity = note
+        for tok in on_off_combined:
+            _type, _val, _onset, _velocity = tok
             if _type == "on":
-                if note_status.get(_pitch) == True:
-                    # Place holder - we can remove note_status logic now
-                    raise Exception
-
-                tokenized_seq.append(("on", _pitch))
+                tokenized_seq.append(("on", _val))
                 tokenized_seq.append(("onset", _onset))
                 tokenized_seq.append(("vel", _velocity))
-                note_status[_pitch] = True
             elif _type == "off":
-                if note_status.get(_pitch) == False:
-                    # Place holder - we can remove note_status logic now
-                    raise Exception
-                else:
-                    tokenized_seq.append(("off", _pitch))
+                tokenized_seq.append(("off", _val))
+                tokenized_seq.append(("onset", _onset))
+            elif _type == "pedal":
+                if _val == 0:
+                    tokenized_seq.append(("pedal", _val))
                     tokenized_seq.append(("onset", _onset))
-                    note_status[_pitch] = False
+                elif _val:
+                    tokenized_seq.append(("pedal", _val))
+                    tokenized_seq.append(("onset", _onset))
 
-        prefix = [("prev", p) for p in prev_notes]
-        return prefix + [self.bos_tok] + tokenized_seq + [self.eos_tok]
+        prefix = [("prev", p) for p in prev_toks]
+
+        # Add eos_tok only if segment includes end of midi_dict
+        if last_msg_ms < end_ms:
+            return prefix + [self.bos_tok] + tokenized_seq + [self.eos_tok]
+        else:
+            return prefix + [self.bos_tok] + tokenized_seq
 
     def _detokenize_midi_dict(
         self,
@@ -222,7 +274,21 @@ class AmtTokenizer(Tokenizer):
                     if DEBUG:
                         raise Exception
 
-                notes_to_close[tok[1]] = (0, self.default_velocity)
+                if tok[1] == "pedal":
+                    pedal_msgs.append(
+                        {
+                            "type": "pedal",
+                            "data": 1,
+                            "tick": 0,
+                            "channel": 0,
+                        }
+                    )
+                elif isinstance(tok[1], int):
+                    notes_to_close[tok[1]] = (0, self.default_velocity)
+                else:
+                    print(f"Invalid 'prev' token: {tok}")
+                    if DEBUG:
+                        raise Exception
             else:
                 raise Exception(
                     f"Invalid note sequence at position {idx}: {tok, tokenized_seq[:idx]}"
@@ -243,16 +309,27 @@ class AmtTokenizer(Tokenizer):
                 print("Unexpected token order: 'prev' seen after '<S>'")
                 if DEBUG:
                     raise Exception
+            elif tok_1_type == "pedal":
+                _pedal_data = tok_1_data
+                _tick = tok_2_data
+                pedal_msgs.append(
+                    {
+                        "type": "pedal",
+                        "data": _pedal_data,
+                        "tick": _tick,
+                        "channel": 0,
+                    }
+                )
             elif tok_1_type == "on":
                 if (tok_2_type, tok_3_type) != ("onset", "vel"):
-                    print("Unexpected token order")
+                    print("Unexpected token order:", tok_1, tok_2, tok_3)
                     if DEBUG:
                         raise Exception
                 else:
                     notes_to_close[tok_1_data] = (tok_2_data, tok_3_data)
             elif tok_1_type == "off":
                 if tok_2_type != "onset":
-                    print("Unexpected token order")
+                    print("Unexpected token order:", tok_1, tok_2, tok_3)
                     if DEBUG:
                         raise Exception
                 else:
@@ -336,9 +413,6 @@ class AmtTokenizer(Tokenizer):
 
     def export_msg_mixup(self):
         def msg_mixup(src: list):
-            def round_to_base(n, base=150):
-                return base * round(n / base)
-
             # Process bos, eos, and pad tokens
             orig_len = len(src)
             seen_pad_tok = False
@@ -387,15 +461,19 @@ class AmtTokenizer(Tokenizer):
                 elif tok_1_type == "off":
                     _onset = tok_2_data
                     buffer[_onset]["off"].append((tok_1, tok_2))
+                elif tok_1_type == "pedal":
+                    _onset = tok_2_data
+                    buffer[_onset]["pedal"].append((tok_1, tok_2))
                 else:
                     pass
 
             # Shuffle order and re-append to result
             for k, v in sorted(buffer.items()):
+                off_pedal_combined = v["off"] + v["pedal"]
+                random.shuffle(off_pedal_combined)
                 random.shuffle(v["on"])
-                random.shuffle(v["off"])
-                for item in v["off"]:
-                    res.append(item[0])  # Pitch
+                for item in off_pedal_combined:
+                    res.append(item[0])  # Off or pedal
                     res.append(item[1])  # Onset
                 for item in v["on"]:
                     res.append(item[0])  # Pitch

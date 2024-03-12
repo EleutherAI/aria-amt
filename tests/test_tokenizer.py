@@ -37,8 +37,24 @@ class TestAmtTokenizer(unittest.TestCase):
             _tokenize_detokenize("maestro2.mid", start=START, end=END)
             _tokenize_detokenize("maestro3.mid", start=START, end=END)
 
+    def test_eos_tok(self):
+        tokenizer = AmtTokenizer()
+        midi_dict = MidiDict.from_midi(f"tests/test_data/maestro1.mid")
+
+        cnt = 0
+        while True:
+            seq = tokenizer._tokenize_midi_dict(
+                midi_dict, start_ms=cnt * 10000, end_ms=(cnt * 10000) + 30000
+            )
+            if len(seq) <= 2:
+                self.assertEqual(seq[-1], tokenizer.eos_tok)
+                break
+            else:
+                cnt += 1
+
     def test_pitch_aug(self):
         tokenizer = AmtTokenizer(return_tensors=True)
+        tensor_pitch_aug = tokenizer.export_tensor_pitch_aug()
 
         midi_dict_1 = MidiDict.from_midi("tests/test_data/maestro1.mid")
         midi_dict_2 = MidiDict.from_midi("tests/test_data/maestro2.mid")
@@ -61,7 +77,7 @@ class TestAmtTokenizer(unittest.TestCase):
                 tokenizer.encode(seq_3),
             )
         )
-        aug_seqs = tokenizer.pitch_aug(seqs, shift=2)
+        aug_seqs = tensor_pitch_aug(seqs, shift=2)
 
         midi_dict_1_aug = tokenizer._detokenize_midi_dict(
             tokenizer.decode(aug_seqs[0]), 30000
