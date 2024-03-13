@@ -409,7 +409,7 @@ def _train(
 
         return avg_train_loss
 
-    def val_loop(dataloader, _epoch: int):
+    def val_loop(dataloader, _epoch: int, aug: bool):
         avg_val_loss = 0
         model.eval()
         for step, batch in (
@@ -421,8 +421,18 @@ def _train(
         ):
             wav, src, tgt = batch
             with torch.no_grad():
-                mel = audio_transform.log_mel(wav)
+                if aug == False:
+                    mel = audio_transform.log_mel(wav)
+                elif aug == True:
+                    # Apply aug without distortion or spec-augment
+                    mel = audio_transform.log_mel(
+                        audio_transform.aug_wav(wav), detune=True
+                    )
+                else:
+                    raise TypeError
+
                 logits = model(mel, src)
+
             logits = logits.transpose(1, 2)  # Transpose for CrossEntropyLoss
             loss = loss_fn(logits, tgt)
 
@@ -432,7 +442,8 @@ def _train(
 
         # EPOCH
         logger.info(
-            f"EPOCH {_epoch}/{epochs + start_epoch}: Finished evaluation - "
+            f"EPOCH {_epoch}/{epochs + start_epoch}: Finished evaluation "
+            f"{'(aug)' if aug is True else ''} - "
             f"average_loss={round(avg_val_loss, 4)}"
         )
 
@@ -455,7 +466,9 @@ def _train(
         loss_writer.writerow(["epoch", "step", "loss"])
         epoch_csv = open(os.path.join(project_dir, "epoch.csv"), "w")
         epoch_writer = csv.writer(epoch_csv)
-        epoch_writer.writerow(["epoch", "avg_train_loss", "avg_val_loss"])
+        epoch_writer.writerow(
+            ["epoch", "avg_train_loss", "avg_val_loss", "avg_val_loss_aug"]
+        )
 
     if resume_epoch is not None:
         start_epoch = resume_epoch + 1
@@ -487,9 +500,16 @@ def _train(
 
     for epoch in range(start_epoch, epochs + start_epoch):
         avg_train_loss = train_loop(dataloader=train_dataloader, _epoch=epoch)
-        avg_val_loss = val_loop(dataloader=val_dataloader, _epoch=epoch)
+        avg_val_loss = val_loop(
+            dataloader=val_dataloader, _epoch=epoch, aug=False
+        )
+        avg_val_loss_aug = val_loop(
+            dataloader=val_dataloader, _epoch=epoch, aug=True
+        )
         if accelerator.is_main_process:
-            epoch_writer.writerow([epoch, avg_train_loss, avg_val_loss])
+            epoch_writer.writerow(
+                [epoch, avg_train_loss, avg_val_loss, avg_val_loss_aug]
+            )
             epoch_csv.flush()
             make_checkpoint(_accelerator=accelerator, _epoch=epoch + 1, _step=0)
 

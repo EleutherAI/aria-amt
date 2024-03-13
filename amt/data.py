@@ -59,7 +59,7 @@ def get_wav_mid_segments(
     res = []
     for idx in range(
         0,
-        total_samples - (num_samples // stride_factor),
+        total_samples - (num_samples - num_samples // stride_factor),
         num_samples // stride_factor,
     ):
         audio_feature = pad_or_trim(wav[idx:], length=num_samples)

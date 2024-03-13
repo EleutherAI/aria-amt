@@ -197,9 +197,9 @@ class AudioTransform(torch.nn.Module):
         bandpass_ratio: float = 0.1,
         distort_ratio: float = 0.15,
         reduce_ratio: float = 0.01,
-        detune_ratio: float = 0.05,
+        detune_ratio: float = 0.01,
         detune_max_shift: float = 0.15,
-        spec_aug_ratio: float = 0.75,
+        spec_aug_ratio: float = 0.50,
     ):
         super().__init__()
         self.tokenizer = AmtTokenizer()
@@ -427,7 +427,7 @@ class AudioTransform(torch.nn.Module):
         return shifted_specs
 
     def detune_spec(self, specs: torch.Tensor):
-        if random.random() < self.detune_ratio: 
+        if random.random() < self.detune_ratio:
             detune_shift = random.uniform(
                 -self.detune_max_shift, self.detune_max_shift
             )
