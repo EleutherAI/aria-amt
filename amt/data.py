@@ -1,5 +1,7 @@
 import mmap
 import os
+import io
+import base64
 import shutil
 import orjson
 import torch
@@ -90,17 +92,21 @@ def write_features(args):
     dirname, basename = os.path.split(save_path)
     proc_save_path = os.path.join(dirname, str(os.getpid()) + basename)
 
-    with open(proc_save_path, mode="ab") as file:
+    with open(proc_save_path, mode="a") as file:
         for wav, seq in features:
-            file.write(
-                orjson.dumps(
-                    wav.numpy(),
-                    option=orjson.OPT_SERIALIZE_NUMPY,
-                )
-            )
-            file.write(b"\n")
-            file.write(orjson.dumps(seq))
-            file.write(b"\n")
+            # Encode wav using b64 to avoid newlines
+            wav_buffer = io.BytesIO()
+            torch.save(wav, wav_buffer)
+            wav_buffer.seek(0)
+            wav_bytes = wav_buffer.read()
+            wav_str = base64.b64encode(wav_bytes).decode("utf-8")
+            file.write(wav_str)
+            file.write("\n")
+
+            seq_bytes = orjson.dumps(seq)
+            seq_str = base64.b64encode(seq_bytes).decode("utf-8")
+            file.write(seq_str)
+            file.write("\n")
 
     return proc_save_path
 
@@ -191,8 +197,10 @@ class AmtDataset(torch.utils.data.Dataset):
         self.file_mmap.seek(self.index[idx])
 
         # Load data from line
-        wav = torch.tensor(orjson.loads(self.file_mmap.readline()))
-        _seq = orjson.loads(self.file_mmap.readline())
+        wav = torch.load(
+            io.BytesIO(base64.b64decode(self.file_mmap.readline()))
+        )
+        _seq = orjson.loads(base64.b64decode(self.file_mmap.readline()))
 
         _seq = [_format(tok) for tok in _seq]  # Format seq
         _seq = self.mixup_fn(_seq)  # Data augmentation
