@@ -222,8 +222,15 @@ class AudioTransform(torch.nn.Module):
         self.reduction_resample_rate = 6000  # Hardcoded?
 
         # Audio aug
-        impulse_paths = self._get_paths(
+        reverb_impulse_paths = self._get_paths(
             os.path.join(os.path.dirname(__file__), "assets", "impulse")
+        )
+        # todo: these fog convolver sounds works OK in testing, but it could use some love.
+        old_recordings_paths = self._get_paths(
+            os.path.join(os.path.dirname(__file__), "assets", "fogconvolver", "old_times", "Samples")
+        )
+        different_microphone_paths = self._get_paths(
+            os.path.join(os.path.dirname(__file__), "assets", "fogconvolver", "vintage_mic", "Samples")
         )
         noise_paths = self._get_paths(
             os.path.join(os.path.dirname(__file__), "assets", "noise")
@@ -232,9 +239,14 @@ class AudioTransform(torch.nn.Module):
             os.path.join(os.path.dirname(__file__), "assets", "applause")
         )
 
+
         # Register impulses and noises as buffers
         self.num_impulse = 0
-        for i, impulse in enumerate(self._get_impulses(impulse_paths)):
+        all_impulses = []
+        all_impulses += self._get_impulses(reverb_impulse_paths)
+        all_impulses += self._get_impulses(old_recordings_paths, sample_rate=8000, sample_length=.2)
+        all_impulses += self._get_impulses(different_microphone_paths, sample_length=.2)
+        for i, impulse in enumerate(all_impulses):
             self.register_buffer(f"impulse_{i}", impulse)
             self.num_impulse += 1
 
@@ -273,12 +285,16 @@ class AudioTransform(torch.nn.Module):
             if os.path.isfile(os.path.join(dir_path, f))
         ]
 
-    def _get_impulses(self, impulse_paths: list):
+    def _get_impulses(self, impulse_paths: list, sample_rate: float | int=None, sample_length: float | int=5):
         impulses = [torchaudio.load(path) for path in impulse_paths]
+        if sample_rate is None:
+            sample_rate = config["sample_rate"]
+
         impulses = [
-            AF.resample(
-                waveform=wav, orig_freq=sr, new_freq=config["sample_rate"]
-            ).mean(0, keepdim=True)[:, : 5 * self.sample_rate]
+            AF
+            .resample(waveform=wav, orig_freq=sr, new_freq=sample_rate)
+            .mean(0, keepdim=True)
+            [:, : int(sample_length * self.sample_rate)]
             for wav, sr in impulses
         ]
         return [
@@ -302,15 +318,10 @@ class AudioTransform(torch.nn.Module):
     def apply_reverb(self, wav: torch.Tensor):
         # wav: (bz, L)
         batch_size, _ = wav.shape
+        reverb_strength = torch.rand(batch_size, 1).to(wav.device)
 
-        reverb_strength = (
-            torch.Tensor([random.uniform(0, 1) for _ in range(batch_size)])
-            .unsqueeze(-1)
-            .to(wav.device)
-        )
         reverb_type = random.randint(0, self.num_impulse - 1)
         impulse = getattr(self, f"impulse_{reverb_type}")
-
         reverb = AF.fftconvolve(wav, impulse, mode="full")[
             :, : self.num_samples
         ]
