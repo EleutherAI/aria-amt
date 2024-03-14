@@ -193,11 +193,12 @@ class AudioTransform(torch.nn.Module):
         min_dist_gain: int = 0,
         noise_ratio: float = 0.95,
         reverb_ratio: float = 0.95,
-        applause_ratio: float = 0.01,  # CHANGE
+        applause_ratio: float = 0.01,
+        bandpass_ratio: float = 0.1,
         distort_ratio: float = 0.15,
         reduce_ratio: float = 0.01,
-        spec_aug_ratio: float = 0.25,
         codecs_ratio: float = 0.01,
+        spec_aug_ratio: float = 0.5,
     ):
         super().__init__()
         self.tokenizer = AmtTokenizer()
@@ -215,6 +216,7 @@ class AudioTransform(torch.nn.Module):
         self.noise_ratio = noise_ratio
         self.reverb_ratio = reverb_ratio
         self.applause_ratio = applause_ratio
+        self.bandpass_ratio = bandpass_ratio
         self.distort_ratio = distort_ratio
         self.reduce_ratio = reduce_ratio
         self.spec_aug_ratio = spec_aug_ratio
@@ -271,7 +273,7 @@ class AudioTransform(torch.nn.Module):
         )
         self.spec_aug = torch.nn.Sequential(
             torchaudio.transforms.FrequencyMasking(
-                freq_mask_param=10, iid_masks=True
+                freq_mask_param=15, iid_masks=True
             ),
             torchaudio.transforms.TimeMasking(
                 time_mask_param=1000, iid_masks=True
@@ -279,6 +281,8 @@ class AudioTransform(torch.nn.Module):
         )
 
     def _get_paths(self, dir_path):
+        os.makedirs(dir_path, exist_ok=True)
+
         return [
             os.path.join(dir_path, f)
             for f in os.listdir(dir_path)
@@ -361,6 +365,14 @@ class AudioTransform(torch.nn.Module):
 
         return AF.add_noise(waveform=wav, noise=applause, snr=snr_dbs)
 
+    def apply_bandpass(self, wav: torch.tensor):
+        central_freq = random.randint(1000, 3500)
+        Q = random.uniform(0.707, 1.41)
+
+        return torchaudio.functional.bandpass_biquad(
+            wav, self.sample_rate, central_freq, Q
+        )
+
     def apply_reduction(self, wav: torch.tensor):
         """
         Limit the high-band pass filter, the low-band pass filter and the sample rate
@@ -387,6 +399,17 @@ class AudioTransform(torch.nn.Module):
 
         return AF.overdrive(wav, gain=gain, colour=colour)
 
+    def distortion_aug_cpu(self, wav: torch.Tensor):
+        # This function should run on the cpu (i.e. in the dataloader collate
+        # function) in order to not be a bottlekneck
+
+        if random.random() < self.reduce_ratio:
+            wav = self.apply_reduction(wav)
+        if random.random() < self.distort_ratio:
+            wav = self.apply_distortion(wav)
+
+        return wav
+
     def apply_codec(self, wav: torch.tensor):
         """
         Apply different audio codecs to the audio.
@@ -400,7 +423,6 @@ class AudioTransform(torch.nn.Module):
             encoder = torchaudio.io.AudioEffector(format=format, encoder=encoder)
             if random.random() < self.codecs_ratio:
                 wav = encoder.apply(wav, self.sample_rate)
-        return wav
 
     def shift_spec(self, specs: torch.Tensor, shift: int):
         if shift == 0:
@@ -428,6 +450,9 @@ class AudioTransform(torch.nn.Module):
         return shifted_specs
 
     def aug_wav(self, wav: torch.Tensor):
+        # This function doesn't apply distortion. If distortion is desired it
+        # should be run before hand on the cpu with distortion_aug_cpu.
+
         # Noise
         if random.random() < self.noise_ratio:
             wav = self.apply_noise(wav)
@@ -435,17 +460,15 @@ class AudioTransform(torch.nn.Module):
         if random.random() < self.applause_ratio:
             wav = self.apply_applause(wav)
 
-        # Distortion
-        if random.random() < self.reduce_ratio:
-            wav = self.apply_reduction(wav)
-        elif random.random() < self.distort_ratio:
-            wav = self.apply_distortion(wav)
-
         # Reverb
         if random.random() < self.reverb_ratio:
-            return self.apply_reverb(wav)
-        else:
-            return wav
+            wav = self.apply_reverb(wav)
+
+        # EQ
+        if random.random() < self.bandpass_ratio:
+            wav = self.apply_bandpass(wav)
+
+        return wav
 
     def norm_mel(self, mel_spec: torch.Tensor):
         log_spec = torch.clamp(mel_spec, min=1e-10).log10()
@@ -468,7 +491,7 @@ class AudioTransform(torch.nn.Module):
         return log_spec
 
     def forward(self, wav: torch.Tensor, shift: int = 0):
-        # Noise, distortion, and reverb
+        # Noise, and reverb
         wav = self.aug_wav(wav)
 
         # Spec & pitch shift
