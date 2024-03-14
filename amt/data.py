@@ -7,7 +7,7 @@ import orjson
 import torch
 import torchaudio
 
-from multiprocessing import Pool
+from multiprocessing import Pool, Queue, Process
 from typing import Callable
 
 from aria.data.midi import MidiDict
@@ -82,17 +82,15 @@ def get_wav_mid_segments(
     return res
 
 
-def write_features(args):
-    audio_path, mid_path, save_path = args
+def write_features(audio_path: str, mid_path: str, save_path: str):
     features = get_wav_mid_segments(
         audio_path=audio_path,
         mid_path=mid_path,
         return_json=False,
     )
-    dirname, basename = os.path.split(save_path)
-    proc_save_path = os.path.join(dirname, str(os.getpid()) + basename)
 
-    with open(proc_save_path, mode="a") as file:
+    # Father forgive me for I have sinned
+    with open(save_path, mode="a") as file:
         for wav, seq in features:
             # Encode wav using b64 to avoid newlines
             wav_buffer = io.BytesIO()
@@ -108,21 +106,18 @@ def write_features(args):
             file.write(seq_str)
             file.write("\n")
 
-    return proc_save_path
-
 
 def get_synth_audio(cli_cmd_fn: str, mid_path: str, wav_path: str):
     _cmd = cli_cmd_fn(mid_path, wav_path)
     os.system(_cmd)
 
 
-def write_synthetic_features(args):
-    cli_cmd_fn, mid_path, save_path = args
+def write_synth_features(cli_cmd_fn: Callable, mid_path: str, save_path: str):
     audio_path_temp = f"{os.getpid()}_temp.wav"
 
     try:
         get_synth_audio(
-            cli_cmd=cli_cmd_fn, mid_path=mid_path, wav_path=save_path
+            cli_cmd=cli_cmd_fn, mid_path=mid_path, wav_path=audio_path_temp
         )
     except:
         if os.path.isfile(audio_path_temp):
@@ -136,22 +131,48 @@ def write_synthetic_features(args):
         )
         os.remove(audio_path_temp)
 
-    dirname, basename = os.path.split(save_path)
-    proc_save_path = os.path.join(dirname, str(os.getpid()) + basename)
-
-    with open(proc_save_path, mode="ab") as file:
+    with open(save_path, mode="a") as file:
         for wav, seq in features:
-            file.write(
-                orjson.dumps(
-                    wav.numpy(),
-                    option=orjson.OPT_SERIALIZE_NUMPY,
-                )
-            )
-            file.write(b"\n")
-            file.write(orjson.dumps(seq))
-            file.write(b"\n")
+            wav_buffer = io.BytesIO()
+            torch.save(wav, wav_buffer)
+            wav_buffer.seek(0)
+            wav_bytes = wav_buffer.read()
+            wav_str = base64.b64encode(wav_bytes).decode("utf-8")
+            file.write(wav_str)
+            file.write("\n")
 
-    return proc_save_path
+            seq_bytes = orjson.dumps(seq)
+            seq_str = base64.b64encode(seq_bytes).decode("utf-8")
+            file.write(seq_str)
+            file.write("\n")
+
+
+def build_worker_fn(load_path_queue, save_path_queue, _save_path: str):
+    dirname, basename = os.path.split(_save_path)
+    worker_save_path = os.path.join(dirname, str(os.getpid()) + basename)
+
+    while not load_path_queue.empty():
+        audio_path, mid_path = load_path_queue.get()
+        write_features(audio_path, mid_path, worker_save_path)
+
+    print("Worker", os.getpid(), "finished")
+    save_path_queue.put(worker_save_path)
+
+
+def build_synth_worker_fn(
+    cli_cmd: Callable,
+    load_path_queue,
+    save_path_queue,
+    _save_path: str,
+):
+    dirname, basename = os.path.split(_save_path)
+    worker_save_path = os.path.join(dirname, str(os.getpid()) + basename)
+
+    while not load_path_queue.empty():
+        mid_path = load_path_queue.get()
+        write_synth_features(cli_cmd, mid_path, worker_save_path)
+
+    save_path_queue.put(worker_save_path)
 
 
 class AmtDataset(torch.utils.data.Dataset):
@@ -266,8 +287,9 @@ class AmtDataset(torch.utils.data.Dataset):
     @classmethod
     def build(
         cls,
-        matched_load_paths: list[tuple[str, str]],
+        load_paths: list,
         save_path: str,
+        cli_cmd_fn: Callable | None = None,
         num_processes: int = 1,
     ):
         assert os.path.isfile(save_path) is False, f"{save_path} already exists"
@@ -277,73 +299,55 @@ class AmtDataset(torch.utils.data.Dataset):
             print(f"Removing existing index file at {index_path}")
             os.remove(AmtDataset._get_index_path(load_path=save_path))
 
-        num_paths = len(matched_load_paths)
-        with Pool(processes=num_processes) as pool:
-            sharded_save_paths = []
-            res = pool.imap_unordered(
-                write_features,
-                ((ap, mp, save_path) for ap, mp in matched_load_paths),
-            )
-            for idx, proc_save_path in enumerate(res):
-                if idx % 10 == 0 and idx != 0:
-                    print(f"Finished {idx}/{num_paths}")
-                if proc_save_path not in sharded_save_paths:
-                    sharded_save_paths.append(proc_save_path)
+        save_path_queue = Queue()
+        load_path_queue = Queue()
+        for entry in load_paths:
+            load_path_queue.put(entry)
 
-        # This is bad, however cat is fast
-        if shutil.which("cat") is None:
-            print("The GNU cat command is not available")
+        if cli_cmd_fn is None:
+            # Build matched audio-midi dataset
+            assert len(load_paths[0]) == 2, "Invalid load paths"
+            print("Building matched audio-midi dataset")
+            worker_processes = [
+                Process(
+                    target=build_worker_fn,
+                    args=(
+                        load_path_queue,
+                        save_path_queue,
+                        save_path,
+                    ),
+                )
+                for _ in range(num_processes)
+            ]
         else:
-            print("Concatinating sharded dataset files")
-            shell_cmd = f"cat "
-            for _path in sharded_save_paths:
-                shell_cmd += f"{_path} "
-                print()
-            shell_cmd += f">> {save_path}"
+            # Build synthetic dataset
+            assert len(load_paths[0]) == 1, "Invalid load paths"
+            print("Building synthetic dataset")
+            worker_processes = [
+                Process(
+                    target=build_synth_worker_fn,
+                    args=(
+                        cli_cmd_fn,
+                        load_path_queue,
+                        save_path_queue,
+                        save_path,
+                    ),
+                )
+                for _ in range(num_processes)
+            ]
 
-            os.system(shell_cmd)
-            for _path in sharded_save_paths:
-                os.remove(_path)
+        for p in worker_processes:
+            p.start()
+        for p in worker_processes:
+            p.join()
 
-        # Create index by loading object
-        AmtDataset(load_path=save_path)
-
-    @classmethod
-    def build_synth(
-        cls,
-        midi_paths: list[str],
-        cli_cmd_fn: Callable,
-        save_path: str,
-        num_processes: int = 1,
-    ):
-        """cli_cmd_fn is expected to be a function with arguments
-
-        mid_path (str): Path to a MIDI file.
-        wav_path (str): Path to save WAV file.
-
-        Which returns a cli command that when executed, will generate and save
-        a wav file to wav_path.
-        """
-
-        assert os.path.isfile(save_path) is False, f"{save_path} already exists"
-
-        index_path = AmtDataset._get_index_path(load_path=save_path)
-        if os.path.isfile(index_path):
-            print(f"Removing existing index file at {index_path}")
-            os.remove(AmtDataset._get_index_path(load_path=save_path))
-
-        num_paths = len(midi_paths)
-        with Pool(processes=num_processes) as pool:
-            sharded_save_paths = []
-            res = pool.imap_unordered(
-                write_synthetic_features,
-                ((cli_cmd_fn, mid_path, save_path) for mid_path in midi_paths),
-            )
-            for idx, proc_save_path in enumerate(res):
-                if idx % 10 == 0 and idx != 0:
-                    print(f"Finished {idx}/{num_paths}")
-                if proc_save_path not in sharded_save_paths:
-                    sharded_save_paths.append(proc_save_path)
+        sharded_save_paths = []
+        while not save_path_queue.empty():
+            try:
+                _path = save_path_queue.get_nowait()
+                sharded_save_paths.append(_path)
+            except Queue.Empty:
+                break
 
         # This is bad, however cat is fast
         if shutil.which("cat") is None:

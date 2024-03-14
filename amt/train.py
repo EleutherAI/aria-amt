@@ -266,7 +266,6 @@ def rolling_average(prev_avg: float, x_n: float, n: int):
         return ((prev_avg * (n - 1)) / n) + (x_n / n)
 
 
-# TODO: Test that loss/backprop is working correctly (look at shapes)
 def _train(
     epochs: int,
     accelerator: accelerate.Accelerator,
@@ -281,34 +280,6 @@ def _train(
     resume_epoch: int | None = None,
     project_dir: str | None = None,
 ):
-    def profile_flops(dataloader: DataLoader):
-        def _bench():
-            for batch in dataloader:
-                wav, src, tgt, pitch_shift = batch
-                with torch.no_grad():
-                    mel = audio_transform.forward(wav, shift=pitch_shift)
-                logits = model(mel, src)  # (b_sz, s_len, v_sz)
-                logits = logits.transpose(1, 2)
-                loss = loss_fn(logits, tgt)
-
-                # Backwards step - omit optimizer.step()
-                accelerator.backward(loss)
-                optimizer.zero_grad()
-                break
-
-        logger.info(
-            f"Model has "
-            f"{'{:,}'.format(sum(p.numel() for p in model.parameters() if p.requires_grad))} "
-            "parameters"
-        )
-        logger.info("Compiling model...")
-        _bench()
-
-        # with flop_counter:
-        #     _bench()
-        # total_flop = sum(flop_counter.get_flop_counts()["Global"].values())
-        # logger.info(f"Forwards & backwards FLOP: {total_flop / 1e12} TF")
-
     def make_checkpoint(_accelerator, _epoch: int, _step: int):
         checkpoint_dir = os.path.join(
             project_dir,
@@ -432,9 +403,10 @@ def _train(
                     raise TypeError
 
                 logits = model(mel, src)
-
-            logits = logits.transpose(1, 2)  # Transpose for CrossEntropyLoss
-            loss = loss_fn(logits, tgt)
+                logits = logits.transpose(
+                    1, 2
+                )  # Transpose for CrossEntropyLoss
+                loss = loss_fn(logits, tgt)
 
             # Logging
             avg_val_loss = rolling_average(avg_val_loss, loss.item(), step)
@@ -458,7 +430,11 @@ def _train(
     PAD_ID = train_dataloader.dataset.tokenizer.pad_id
     logger = get_logger(__name__)  # Accelerate logger
     loss_fn = nn.CrossEntropyLoss(ignore_index=PAD_ID)
-    profile_flops(dataloader=train_dataloader)
+    logger.info(
+        f"Model has "
+        f"{'{:,}'.format(sum(p.numel() for p in model.parameters() if p.requires_grad))} "
+        "parameters"
+    )
 
     if accelerator.is_main_process:
         loss_csv = open(os.path.join(project_dir, "loss.csv"), "w")

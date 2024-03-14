@@ -1,7 +1,8 @@
 import unittest
 import logging
 import os
-import time
+import cProfile
+import pstats
 import torch
 import torchaudio
 import matplotlib.pyplot as plt
@@ -9,6 +10,7 @@ import matplotlib.pyplot as plt
 from amt.data import get_wav_mid_segments, AmtDataset
 from amt.tokenizer import AmtTokenizer
 from amt.audio import AudioTransform, log_mel_spectrogram
+from amt.train import get_dataloaders
 from aria.data.midi import MidiDict
 
 
@@ -16,7 +18,17 @@ logging.basicConfig(level=logging.INFO)
 if os.path.isdir("tests/test_results") is False:
     os.mkdir("tests/test_results")
 
-MAESTRO_PATH = "/weka/proj-aria/aria-amt/data/maestro/val.jsonl"
+MAESTRO_PATH = "/weka/proj-aria/aria-amt/data/train.jsonl"
+
+
+def plot_spec(mel: torch.Tensor, name: str | int):
+    plt.figure(figsize=(10, 4))
+    plt.imshow(mel, aspect="auto", origin="lower", cmap="viridis")
+    plt.colorbar(format="%+2.0f dB")
+    plt.title("(mel)-Spectrogram")
+    plt.tight_layout()
+    plt.savefig(f"tests/test_results/{name}.png")
+    plt.close()
 
 
 # Need to test this properly, have issues turning mel_spec back into audio
@@ -32,14 +44,14 @@ class TestDataGen(unittest.TestCase):
 class TestAmtDataset(unittest.TestCase):
     def test_build(self):
         matched_paths = [
-            ("tests/test_data/147.wav", "tests/test_data/147.mid")
+            ("tests/test_data/maestro.wav", "tests/test_data/maestro1.mid")
             for _ in range(3)
         ]
         if os.path.isfile("tests/test_results/dataset.jsonl"):
             os.remove("tests/test_results/dataset.jsonl")
 
         AmtDataset.build(
-            matched_load_paths=matched_paths,
+            load_paths=matched_paths,
             save_path="tests/test_results/dataset.jsonl",
         )
 
@@ -61,6 +73,7 @@ class TestAmtDataset(unittest.TestCase):
             return
 
         tokenizer = AmtTokenizer()
+        audio_transform = AudioTransform()
         dataset = AmtDataset(load_path=MAESTRO_PATH)
         print(f"Dataset length: {len(dataset)}")
         for idx, (wav, src, tgt) in enumerate(dataset):
@@ -74,8 +87,13 @@ class TestAmtDataset(unittest.TestCase):
                 )
 
                 src_mid = src_mid_dict.to_midi()
-                if idx % 10 == 0:
-                    src_mid.save(f"tests/test_results/dataset_{idx}.mid")
+                src_mid.save(f"tests/test_results/dataset_{idx}.mid")
+                torchaudio.save(
+                    f"tests/test_results/wav_{idx}.wav", wav.unsqueeze(0), 16000
+                )
+                plot_spec(
+                    audio_transform(wav.unsqueeze(0)).squeeze(0), f"mel_{idx}"
+                )
 
             self.assertTrue(tokenizer.unk_tok not in src_dec)
             self.assertTrue(tokenizer.unk_tok not in tgt_dec)
@@ -84,15 +102,6 @@ class TestAmtDataset(unittest.TestCase):
 
 
 class TestAug(unittest.TestCase):
-    def plot_spec(self, mel: torch.Tensor, name: str | int):
-        plt.figure(figsize=(10, 4))
-        plt.imshow(mel, aspect="auto", origin="lower", cmap="viridis")
-        plt.colorbar(format="%+2.0f dB")
-        plt.title("(mel)-Spectrogram")
-        plt.tight_layout()
-        plt.savefig(f"tests/test_results/{name}.png")
-        plt.close()
-
     def test_spec(self):
         SAMPLE_RATE, CHUNK_LEN = 16000, 30
         audio_transform = AudioTransform()
@@ -115,11 +124,11 @@ class TestAug(unittest.TestCase):
         torchaudio.save("tests/test_results/shift.wav", shift_wav, SAMPLE_RATE)
 
         log_mel = log_mel_spectrogram(wav)
-        self.plot_spec(log_mel.squeeze(0), "orig")
+        plot_spec(log_mel.squeeze(0), "orig")
 
         _mel = audio_transform.mel_transform(spec)
         _log_mel = audio_transform.norm_mel(_mel)
-        self.plot_spec(_log_mel.squeeze(0), "new")
+        plot_spec(_log_mel.squeeze(0), "new")
 
     def test_pitch_aug(self):
         tokenizer = AmtTokenizer(return_tensors=True)
@@ -171,11 +180,11 @@ class TestAug(unittest.TestCase):
         torchaudio.save("tests/test_results/detune.wav", shift_wav, SAMPLE_RATE)
 
         log_mel = log_mel_spectrogram(wav)
-        self.plot_spec(log_mel.squeeze(0), "orig")
+        plot_spec(log_mel.squeeze(0), "orig")
 
         _mel = audio_transform.mel_transform(spec)
         _log_mel = audio_transform.norm_mel(_mel)
-        self.plot_spec(_log_mel.squeeze(0), "new")
+        plot_spec(_log_mel.squeeze(0), "new")
 
     def test_mels(self):
         SAMPLE_RATE, CHUNK_LEN = 16000, 30
@@ -193,7 +202,7 @@ class TestAug(unittest.TestCase):
         wavs = torch.stack((wav[0], wav[0], wav[0]))
         mels = audio_transform(wavs)
         for idx in range(mels.shape[0]):
-            self.plot_spec(mels[idx], idx)
+            plot_spec(mels[idx], idx)
 
     def test_distortion(self):
         SAMPLE_RATE, CHUNK_LEN = 16000, 30
@@ -254,6 +263,28 @@ class TestAug(unittest.TestCase):
         torchaudio.save("tests/test_results/orig.wav", wav, SAMPLE_RATE)
         res = audio_transform.apply_noise(wav)
         torchaudio.save("tests/test_results/noise.wav", res, SAMPLE_RATE)
+
+
+class TestDataLoader(unittest.TestCase):
+    def load_data(self, dataloader, num_batches=100):
+        for idx, data in enumerate(dataloader):
+            if idx >= num_batches:
+                break
+
+    def test_profile_dl(self):
+        train_dataloader, val_dataloader = get_dataloaders(
+            train_data_path="/weka/proj-aria/aria-amt/data/train.jsonl",
+            val_data_path="/weka/proj-aria/aria-amt/data/train.jsonl",
+            batch_size=16,
+            num_workers=0,
+        )
+
+        profiler = cProfile.Profile()
+        profiler.enable()
+        self.load_data(train_dataloader, num_batches=10)
+        profiler.disable()
+        stats = pstats.Stats(profiler).sort_stats("cumulative")
+        stats.print_stats()
 
 
 if __name__ == "__main__":

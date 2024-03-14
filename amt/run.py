@@ -94,13 +94,13 @@ def build_maestro(
     )
     print(f"Building {val_file}")
     AmtDataset.build(
-        matched_load_paths=matched_paths_val,
+        load_paths=matched_paths_val,
         save_path=val_file,
         num_processes=num_procs,
     )
     print(f"Building {test_file}")
     AmtDataset.build(
-        matched_load_paths=matched_paths_test,
+        load_paths=matched_paths_test,
         save_path=test_file,
         num_processes=num_procs,
     )

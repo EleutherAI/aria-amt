@@ -91,8 +91,10 @@ class AmtTokenizer(Tokenizer):
             end_ms - start_ms <= self.max_onset
         ), "Invalid values for start_ms, end_ms"
 
-        midi_dict.resolve_pedal()  # Important !!
+        if midi_dict.pedal_resolved is False:
+            midi_dict.resolve_pedal()  # Important !!
         pedal_intervals = midi_dict._build_pedal_intervals()
+
         if len(pedal_intervals.keys()) > 1:
             print("Warning: midi_dict has more than one pedal channel")
         if len(midi_dict.instrument_msgs) > 1:
