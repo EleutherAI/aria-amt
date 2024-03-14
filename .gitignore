@@ -16,6 +16,9 @@
 *.html
 *.htm
 *.sf2
+*.atp
+*.ats
+*.txt
 
 .idea/
 notebooks/scratch
