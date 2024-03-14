@@ -19,6 +19,7 @@
 *.atp
 *.ats
 *.txt
+*.wav
 
 .idea/
 notebooks/scratch
