@@ -88,7 +88,7 @@ def build_maestro(
 
     print(f"Building {train_file}")
     AmtDataset.build(
-        matched_load_paths=matched_paths_train,
+        load_paths=matched_paths_train,
         save_path=train_file,
         num_processes=num_procs,
     )
