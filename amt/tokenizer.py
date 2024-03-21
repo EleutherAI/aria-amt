@@ -86,6 +86,7 @@ class AmtTokenizer(Tokenizer):
         midi_dict: MidiDict,
         start_ms: int,
         end_ms: int,
+        max_pedal_len_ms: int | None = None
     ):
         assert (
             end_ms - start_ms <= self.max_onset
@@ -180,6 +181,9 @@ class AmtTokenizer(Tokenizer):
                 tempo_msgs=midi_dict.tempo_msgs,
                 ticks_per_beat=midi_dict.ticks_per_beat,
             )
+            
+            if max_pedal_len_ms is not None:
+                pedal_off_ms = min(pedal_off_ms, pedal_on_ms + max_pedal_len_ms)
 
             rel_on_ms_q = self._quantize_onset(pedal_on_ms - start_ms)
             rel_off_ms_q = self._quantize_onset(pedal_off_ms - start_ms)

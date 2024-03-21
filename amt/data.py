@@ -16,6 +16,8 @@ from amt.config import load_config
 from amt.audio import pad_or_trim
 
 
+# Occasionally the worker util goes to 0 for some reason, debug this
+
 def get_wav_mid_segments(
     audio_path: str,
     mid_path: str = "",
@@ -70,6 +72,7 @@ def get_wav_mid_segments(
                 midi_dict=midi_dict,
                 start_ms=idx // samples_per_ms,
                 end_ms=(idx + num_samples) / samples_per_ms,
+                max_pedal_len_ms=10000,
             )
         else:
             mid_feature = []

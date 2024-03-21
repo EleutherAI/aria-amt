@@ -17,7 +17,7 @@
         "n_mels": 256
     },
     "data": {
-        "stride_factor": 6,
+        "stride_factor": 12,
         "max_seq_len": 4096
     }
 } 

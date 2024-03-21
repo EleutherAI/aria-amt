@@ -298,7 +298,6 @@ def _train(
         dataloader: DataLoader,
         _epoch: int,
         _resume_step: int = 0,
-        overfit: bool = False,
     ):
         avg_train_loss = 0
         trailing_loss = 0
@@ -466,9 +465,12 @@ def _train(
             _epoch=resume_epoch,
             _resume_step=resume_step,
         )
-        avg_val_loss = val_loop(dataloader=val_dataloader, _epoch=resume_epoch)
+        avg_val_loss = val_loop(dataloader=val_dataloader, _epoch=resume_epoch, aug=False)
+        avg_val_loss_aug = val_loop(dataloader=val_dataloader, _epoch=resume_epoch, aug=True)
         if accelerator.is_main_process:
-            epoch_writer.writerow([resume_epoch, avg_train_loss, avg_val_loss])
+            epoch_writer.writerow(
+                [resume_epoch, avg_train_loss, avg_val_loss, avg_val_loss_aug]
+            )
             epoch_csv.flush()
             make_checkpoint(
                 _accelerator=accelerator, _epoch=start_epoch, _step=0
@@ -561,6 +563,7 @@ def resume_train(
     model = torch.compile(model)
     audio_transform = AudioTransform().to(accelerator.device)
     logger.info(f"Loaded model with config: {load_model_config(model_name)}")
+    logger.info(f"Loaded transform with config: {audio_transform.get_params()}")
 
     train_dataloader, val_dataloader = get_dataloaders(
         train_data_path=train_data_path,
@@ -678,6 +681,7 @@ def train(
     model = torch.compile(model)
     audio_transform = AudioTransform().to(accelerator.device)
     logger.info(f"Loaded model with config: {load_model_config(model_name)}")
+    logger.info(f"Loaded transform with config: {audio_transform.get_params()}")
     if mode == "finetune":
         try:
             model.load_state_dict(_load_weight(finetune_cp_path))

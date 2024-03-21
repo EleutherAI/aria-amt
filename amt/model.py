@@ -50,67 +50,27 @@ class MultiHeadAttention(nn.Module):
 
         self.n_head = n_head
         self.d_head = n_state // n_head
-        self.query = nn.Linear(n_state, n_state)
+        self.query = nn.Linear(n_state, n_state, bias=False)
         self.key = nn.Linear(n_state, n_state, bias=False)
-        self.value = nn.Linear(n_state, n_state)
-        self.out = nn.Linear(n_state, n_state)
+        self.value = nn.Linear(n_state, n_state, bias=False)
+        self.out = nn.Linear(n_state, n_state, bias=False)
 
     def forward(
         self,
         x: Tensor,
         xa: Optional[Tensor] = None,
         mask: Optional[Tensor] = None,
-        kv_cache: Optional[dict] = None,
     ):
         q = self.query(x)
 
-        if kv_cache is None:
-            # Normal forward
-            if xa is not None:
-                # Cross att
-                k = self.key(xa)
-                v = self.value(xa)
-            else:
-                # Self att in encoder/decoder
-                k = self.key(x)
-                v = self.value(x)
+        if xa is not None:
+            # Cross att
+            k = self.key(xa)
+            v = self.value(xa)
         else:
-            # Using cache
-            k_id = f"{id(self)}_k"
-            v_id = f"{id(self)}_v"
-
-            if xa is not None:
-                # Cross att - calculate once and reuse
-                if kv_cache.get(k_id) is None:
-                    # Not recorded yet, calculate and store
-                    k = self.key(xa)
-                    v = self.value(xa)
-                    kv_cache[k_id] = k
-                    kv_cache[v_id] = v
-                else:
-                    # Already recorded, get
-                    k = kv_cache[k_id]
-                    v = kv_cache[v_id]
-            else:
-                # Decoder self att, append each time
-                if kv_cache.get(k_id) is None:
-                    # Not recorded yet, calculate and store
-                    k = self.key(x)
-                    v = self.value(x)
-                    kv_cache[k_id] = k
-                    kv_cache[v_id] = v
-                else:
-                    # Already recorded, get and append
-                    k = torch.cat((kv_cache[k_id], self.key(x)), dim=1).detach()
-                    v = torch.cat(
-                        (kv_cache[v_id], self.value(x)), dim=1
-                    ).detach()
-                    kv_cache[k_id] = k
-                    kv_cache[v_id] = v
-
-                    # When using kv_cache for decoder self attention, we don't
-                    # want to use a mask in the self attention calculation
-                    mask = None
+            # Self att in encoder/decoder
+            k = self.key(x)
+            v = self.value(x)
 
         # Reshape and transpose for attention calculation
         batch_size, target_seq_len, _ = q.shape
@@ -157,7 +117,7 @@ class ResidualAttentionBlock(nn.Module):
 
         n_mlp = n_state * 4
         self.mlp = nn.Sequential(
-            nn.Linear(n_state, n_mlp), nn.GELU(), nn.Linear(n_mlp, n_state)
+            nn.Linear(n_state, n_mlp, bias=False), nn.GELU(), nn.Linear(n_mlp, n_state, bias=False)
         )
         self.mlp_ln = nn.LayerNorm(n_state)
 
@@ -166,13 +126,12 @@ class ResidualAttentionBlock(nn.Module):
         x: Tensor,
         xa: Optional[Tensor] = None,
         mask: Optional[Tensor] = None,
-        kv_cache: Optional[dict] = None,
     ):
-        x = x + self.attn(self.attn_ln(x), mask=mask, kv_cache=kv_cache)[0]
+        x = x + self.attn(self.attn_ln(x), mask=mask)[0]
         if self.cross_attn:
             x = (
                 x
-                + self.cross_attn(self.cross_attn_ln(x), xa, kv_cache=kv_cache)[
+                + self.cross_attn(self.cross_attn_ln(x), xa)[
                     0
                 ]
             )
@@ -236,22 +195,21 @@ class TextDecoder(nn.Module):
         mask = torch.empty(n_ctx, n_ctx).fill_(-np.inf).triu_(1)
         self.register_buffer("mask", mask, persistent=False)
 
-    def forward(self, x: Tensor, xa: Tensor, kv_cache: Optional[dict] = None):
+    def forward(self, x: Tensor, xa: Tensor):
         """
         x : torch.LongTensor, shape = (batch_size, <= n_ctx)
             the text tokens
         xa : torch.Tensor, shape = (batch_size, n_audio_ctx, n_audio_state)
             the encoded audio features to be attended on
         """
-        offset = next(iter(kv_cache.values())).shape[1] if kv_cache else 0
         x = (
             self.token_embedding(x)
-            + self.positional_embedding[offset : offset + x.shape[-1]]
+            + self.positional_embedding[ : x.shape[-1]]
         )
         x = x.to(xa.dtype)
 
         for block in self.blocks:
-            x = block(x, xa, mask=self.mask, kv_cache=kv_cache)
+            x = block(x, xa, mask=self.mask)
 
         x = self.ln(x)
         logits = (

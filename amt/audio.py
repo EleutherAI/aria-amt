@@ -194,12 +194,12 @@ class AudioTransform(torch.nn.Module):
         noise_ratio: float = 0.95,
         reverb_ratio: float = 0.95,
         applause_ratio: float = 0.01,
-        bandpass_ratio: float = 0.1,
+        bandpass_ratio: float = 0.15,  
         distort_ratio: float = 0.15,
         reduce_ratio: float = 0.01,
-        detune_ratio: float = 0.01,
-        detune_max_shift: float = 0.15,
-        spec_aug_ratio: float = 0.50,
+        detune_ratio: float = 0.1,  
+        detune_max_shift: float = 0.15, 
+        spec_aug_ratio: float = 0.5, 
     ):
         super().__init__()
         self.tokenizer = AmtTokenizer()
@@ -269,6 +269,19 @@ class AudioTransform(torch.nn.Module):
                 time_mask_param=1000, iid_masks=True
             ),
         )
+        
+    def get_params(self):
+        return {
+                "noise_ratio": self.noise_ratio,
+                "reverb_ratio": self.reverb_ratio,
+                "applause_ratio": self.applause_ratio,
+                "bandpass_ratio": self.bandpass_ratio,
+                "distort_ratio": self.distort_ratio,
+                "reduce_ratio": self.reduce_ratio,
+                "detune_ratio": self.detune_ratio,
+                "detune_max_shift": self.detune_max_shift,
+                "spec_aug_ratio": self.spec_aug_ratio,
+        }
 
     def _get_paths(self, dir_path):
         os.makedirs(dir_path, exist_ok=True)
@@ -475,8 +488,8 @@ class AudioTransform(torch.nn.Module):
 
         if shift is not None and shift != 0:
             spec = self.shift_spec(spec, shift)
-        if detune is True:
-            # This won't always apply detuning
+        elif detune is True:
+            # Don't detune and spec shift at the same time
             spec = self.detune_spec(spec)
 
         mel_spec = self.mel_transform(spec)
