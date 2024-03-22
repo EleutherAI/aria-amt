@@ -266,7 +266,6 @@ def rolling_average(prev_avg: float, x_n: float, n: int):
         return ((prev_avg * (n - 1)) / n) + (x_n / n)
 
 
-# TODO: Test that loss/backprop is working correctly (look at shapes)
 def _train(
     epochs: int,
     accelerator: accelerate.Accelerator,
@@ -281,34 +280,6 @@ def _train(
     resume_epoch: int | None = None,
     project_dir: str | None = None,
 ):
-    def profile_flops(dataloader: DataLoader):
-        def _bench():
-            for batch in dataloader:
-                wav, src, tgt, pitch_shift = batch
-                with torch.no_grad():
-                    mel = audio_transform.forward(wav, shift=pitch_shift)
-                logits = model(mel, src)  # (b_sz, s_len, v_sz)
-                logits = logits.transpose(1, 2)
-                loss = loss_fn(logits, tgt)
-
-                # Backwards step - omit optimizer.step()
-                accelerator.backward(loss)
-                optimizer.zero_grad()
-                break
-
-        logger.info(
-            f"Model has "
-            f"{'{:,}'.format(sum(p.numel() for p in model.parameters() if p.requires_grad))} "
-            "parameters"
-        )
-        logger.info("Compiling model...")
-        _bench()
-
-        # with flop_counter:
-        #     _bench()
-        # total_flop = sum(flop_counter.get_flop_counts()["Global"].values())
-        # logger.info(f"Forwards & backwards FLOP: {total_flop / 1e12} TF")
-
     def make_checkpoint(_accelerator, _epoch: int, _step: int):
         checkpoint_dir = os.path.join(
             project_dir,
@@ -327,7 +298,6 @@ def _train(
         dataloader: DataLoader,
         _epoch: int,
         _resume_step: int = 0,
-        overfit: bool = False,
     ):
         avg_train_loss = 0
         trailing_loss = 0
@@ -409,7 +379,7 @@ def _train(
 
         return avg_train_loss
 
-    def val_loop(dataloader, _epoch: int):
+    def val_loop(dataloader, _epoch: int, aug: bool):
         avg_val_loss = 0
         model.eval()
         for step, batch in (
@@ -421,10 +391,21 @@ def _train(
         ):
             wav, src, tgt = batch
             with torch.no_grad():
-                mel = audio_transform.log_mel(wav)
+                if aug == False:
+                    mel = audio_transform.log_mel(wav)
+                elif aug == True:
+                    # Apply aug without distortion or spec-augment
+                    mel = audio_transform.log_mel(
+                        audio_transform.aug_wav(wav), detune=True
+                    )
+                else:
+                    raise TypeError
+
                 logits = model(mel, src)
-            logits = logits.transpose(1, 2)  # Transpose for CrossEntropyLoss
-            loss = loss_fn(logits, tgt)
+                logits = logits.transpose(
+                    1, 2
+                )  # Transpose for CrossEntropyLoss
+                loss = loss_fn(logits, tgt)
 
             # Logging
             avg_val_loss = rolling_average(avg_val_loss, loss.item(), step)
@@ -432,7 +413,8 @@ def _train(
 
         # EPOCH
         logger.info(
-            f"EPOCH {_epoch}/{epochs + start_epoch}: Finished evaluation - "
+            f"EPOCH {_epoch}/{epochs + start_epoch}: Finished evaluation "
+            f"{'(aug)' if aug is True else ''} - "
             f"average_loss={round(avg_val_loss, 4)}"
         )
 
@@ -447,7 +429,11 @@ def _train(
     PAD_ID = train_dataloader.dataset.tokenizer.pad_id
     logger = get_logger(__name__)  # Accelerate logger
     loss_fn = nn.CrossEntropyLoss(ignore_index=PAD_ID)
-    profile_flops(dataloader=train_dataloader)
+    logger.info(
+        f"Model has "
+        f"{'{:,}'.format(sum(p.numel() for p in model.parameters() if p.requires_grad))} "
+        "parameters"
+    )
 
     if accelerator.is_main_process:
         loss_csv = open(os.path.join(project_dir, "loss.csv"), "w")
@@ -455,7 +441,9 @@ def _train(
         loss_writer.writerow(["epoch", "step", "loss"])
         epoch_csv = open(os.path.join(project_dir, "epoch.csv"), "w")
         epoch_writer = csv.writer(epoch_csv)
-        epoch_writer.writerow(["epoch", "avg_train_loss", "avg_val_loss"])
+        epoch_writer.writerow(
+            ["epoch", "avg_train_loss", "avg_val_loss", "avg_val_loss_aug"]
+        )
 
     if resume_epoch is not None:
         start_epoch = resume_epoch + 1
@@ -477,9 +465,16 @@ def _train(
             _epoch=resume_epoch,
             _resume_step=resume_step,
         )
-        avg_val_loss = val_loop(dataloader=val_dataloader, _epoch=resume_epoch)
+        avg_val_loss = val_loop(
+            dataloader=val_dataloader, _epoch=resume_epoch, aug=False
+        )
+        avg_val_loss_aug = val_loop(
+            dataloader=val_dataloader, _epoch=resume_epoch, aug=True
+        )
         if accelerator.is_main_process:
-            epoch_writer.writerow([resume_epoch, avg_train_loss, avg_val_loss])
+            epoch_writer.writerow(
+                [resume_epoch, avg_train_loss, avg_val_loss, avg_val_loss_aug]
+            )
             epoch_csv.flush()
             make_checkpoint(
                 _accelerator=accelerator, _epoch=start_epoch, _step=0
@@ -487,9 +482,16 @@ def _train(
 
     for epoch in range(start_epoch, epochs + start_epoch):
         avg_train_loss = train_loop(dataloader=train_dataloader, _epoch=epoch)
-        avg_val_loss = val_loop(dataloader=val_dataloader, _epoch=epoch)
+        avg_val_loss = val_loop(
+            dataloader=val_dataloader, _epoch=epoch, aug=False
+        )
+        avg_val_loss_aug = val_loop(
+            dataloader=val_dataloader, _epoch=epoch, aug=True
+        )
         if accelerator.is_main_process:
-            epoch_writer.writerow([epoch, avg_train_loss, avg_val_loss])
+            epoch_writer.writerow(
+                [epoch, avg_train_loss, avg_val_loss, avg_val_loss_aug]
+            )
             epoch_csv.flush()
             make_checkpoint(_accelerator=accelerator, _epoch=epoch + 1, _step=0)
 
@@ -565,6 +567,7 @@ def resume_train(
     model = torch.compile(model)
     audio_transform = AudioTransform().to(accelerator.device)
     logger.info(f"Loaded model with config: {load_model_config(model_name)}")
+    logger.info(f"Loaded transform with config: {audio_transform.get_params()}")
 
     train_dataloader, val_dataloader = get_dataloaders(
         train_data_path=train_data_path,
@@ -682,6 +685,7 @@ def train(
     model = torch.compile(model)
     audio_transform = AudioTransform().to(accelerator.device)
     logger.info(f"Loaded model with config: {load_model_config(model_name)}")
+    logger.info(f"Loaded transform with config: {audio_transform.get_params()}")
     if mode == "finetune":
         try:
             model.load_state_dict(_load_weight(finetune_cp_path))

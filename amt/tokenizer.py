@@ -11,10 +11,6 @@ from aria.tokenizer import Tokenizer
 from amt.config import load_config
 
 
-# Instead of doing this, we could calculate beams at inference time, selecting
-# the note with the first onset so that we don't miss notes.
-
-
 DEBUG = os.getenv("DEBUG")
 
 
@@ -63,6 +59,12 @@ class AmtTokenizer(Tokenizer):
         )
         self.pad_id = self.tok_to_id[self.pad_tok]
 
+    def _get_inference_ids(self):
+        return [
+            self.tok_to_id[tok]
+            for tok in self.velocity_tokens + self.onset_tokens
+        ]
+
     def _quantize_onset(self, time: int):
         # This function will return values res >= 0 (inc. 0)
         return self._find_closest_int(time, self.onset_time_quantizations)
@@ -86,13 +88,16 @@ class AmtTokenizer(Tokenizer):
         midi_dict: MidiDict,
         start_ms: int,
         end_ms: int,
+        max_pedal_len_ms: int | None = None,
     ):
         assert (
             end_ms - start_ms <= self.max_onset
         ), "Invalid values for start_ms, end_ms"
 
-        midi_dict.resolve_pedal()  # Important !!
+        if midi_dict.pedal_resolved is False:
+            midi_dict.resolve_pedal()  # Important !!
         pedal_intervals = midi_dict._build_pedal_intervals()
+
         if len(pedal_intervals.keys()) > 1:
             print("Warning: midi_dict has more than one pedal channel")
         if len(midi_dict.instrument_msgs) > 1:
@@ -178,6 +183,9 @@ class AmtTokenizer(Tokenizer):
                 tempo_msgs=midi_dict.tempo_msgs,
                 ticks_per_beat=midi_dict.ticks_per_beat,
             )
+
+            if max_pedal_len_ms is not None:
+                pedal_off_ms = min(pedal_off_ms, pedal_on_ms + max_pedal_len_ms)
 
             rel_on_ms_q = self._quantize_onset(pedal_on_ms - start_ms)
             rel_off_ms_q = self._quantize_onset(pedal_off_ms - start_ms)
@@ -307,8 +315,7 @@ class AmtTokenizer(Tokenizer):
             if tok_1_type == "prev":
                 notes_to_close[tok_1_data] = (0, self.default_velocity)
                 print("Unexpected token order: 'prev' seen after '<S>'")
-                if DEBUG:
-                    raise Exception
+                raise ValueError
             elif tok_1_type == "pedal":
                 _pedal_data = tok_1_data
                 _tick = tok_2_data
@@ -323,8 +330,7 @@ class AmtTokenizer(Tokenizer):
             elif tok_1_type == "on":
                 if (tok_2_type, tok_3_type) != ("onset", "vel"):
                     print("Unexpected token order:", tok_1, tok_2, tok_3)
-                    if DEBUG:
-                        raise Exception
+                    raise ValueError
                 else:
                     notes_to_close[tok_1_data] = (tok_2_data, tok_3_data)
             elif tok_1_type == "off":

@@ -38,6 +38,12 @@ def _add_transcribe_args(subparser):
     subparser.add_argument(
         "-multi_gpu", help="use all GPUs", action="store_true", default=False
     )
+    subparser.add_argument(
+        "-q8",
+        help="apply int8 quantization on weights",
+        action="store_true",
+        default=False,
+    )
     subparser.add_argument("-bs", help="batch size", type=int, default=16)
 
 
@@ -88,19 +94,19 @@ def build_maestro(
 
     print(f"Building {train_file}")
     AmtDataset.build(
-        matched_load_paths=matched_paths_train,
+        load_paths=matched_paths_train,
         save_path=train_file,
         num_processes=num_procs,
     )
     print(f"Building {val_file}")
     AmtDataset.build(
-        matched_load_paths=matched_paths_val,
+        load_paths=matched_paths_val,
         save_path=val_file,
         num_processes=num_procs,
     )
     print(f"Building {test_file}")
     AmtDataset.build(
-        matched_load_paths=matched_paths_test,
+        load_paths=matched_paths_test,
         save_path=test_file,
         num_processes=num_procs,
     )
@@ -114,7 +120,6 @@ def transcribe(
     load_dir=None,
     batch_size=16,
     multi_gpu=False,
-    augment=None,
 ):
     """
     Transcribe audio files to midi using the given model and checkpoint.
@@ -138,13 +143,11 @@ def transcribe(
     augment : str
         Augment the audio files before transcribing. This is used for evaluation. This tests the robustness of the model.
     """
-    import torch
     from torch.cuda import is_available as cuda_is_available
-    from torch.multiprocessing import Queue
     from amt.tokenizer import AmtTokenizer
-    from amt.infer import batch_transcribe
+    from amt.inference.transcribe import batch_transcribe
     from amt.config import load_model_config
-    from amt.model import ModelConfig, AmtEncoderDecoder
+    from amt.inference.model import ModelConfig, AmtEncoderDecoder
     from aria.utils import _load_weight
 
     assert cuda_is_available(), "CUDA device not found"
@@ -176,7 +179,6 @@ def transcribe(
             _model_state[k] = v
     model_state = _model_state
     model.load_state_dict(model_state)
-    torch.multiprocessing.set_start_method("spawn")
 
     if trans_mode == "batch":
         found_wav = glob.glob(
@@ -196,31 +198,14 @@ def transcribe(
             int(id) for id in os.getenv("CUDA_VISIBLE_DEVICES").split(",")
         ]
         print(f"Visible gpu_ids: {gpu_ids}")
-
-        # Use shared file queue between gpu processes
-        file_queue = torch.multiprocessing.Queue()
-        for file_path in file_paths:
-            file_queue.put(file_path)
-
-        processes = []
-        for gpu_id in gpu_ids:
-            print(f"Starting process on cuda-{gpu_id}")
-            process = torch.multiprocessing.Process(
-                target=batch_transcribe,
-                args=(
-                    file_queue,
-                    model,
-                    save_dir,
-                    batch_size,
-                    gpu_id,
-                    load_dir,
-                ),
-            )
-            process.start()
-            processes.append(process)
-
-        for process in processes:
-            process.join()
+        batch_transcribe(
+            file_paths=file_paths,
+            model=model,
+            save_dir=save_dir,
+            batch_size=batch_size,
+            input_dir=load_dir,
+            gpu_ids=gpu_ids,
+        )
 
     else:
         batch_transcribe(
