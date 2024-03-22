@@ -117,7 +117,9 @@ class ResidualAttentionBlock(nn.Module):
 
         n_mlp = n_state * 4
         self.mlp = nn.Sequential(
-            nn.Linear(n_state, n_mlp, bias=False), nn.GELU(), nn.Linear(n_mlp, n_state, bias=False)
+            nn.Linear(n_state, n_mlp, bias=False),
+            nn.GELU(),
+            nn.Linear(n_mlp, n_state, bias=False),
         )
         self.mlp_ln = nn.LayerNorm(n_state)
 
@@ -129,12 +131,7 @@ class ResidualAttentionBlock(nn.Module):
     ):
         x = x + self.attn(self.attn_ln(x), mask=mask)[0]
         if self.cross_attn:
-            x = (
-                x
-                + self.cross_attn(self.cross_attn_ln(x), xa)[
-                    0
-                ]
-            )
+            x = x + self.cross_attn(self.cross_attn_ln(x), xa)[0]
         x = x + self.mlp(self.mlp_ln(x))
         return x
 
@@ -202,10 +199,7 @@ class TextDecoder(nn.Module):
         xa : torch.Tensor, shape = (batch_size, n_audio_ctx, n_audio_state)
             the encoded audio features to be attended on
         """
-        x = (
-            self.token_embedding(x)
-            + self.positional_embedding[ : x.shape[-1]]
-        )
+        x = self.token_embedding(x) + self.positional_embedding[: x.shape[-1]]
         x = x.to(xa.dtype)
 
         for block in self.blocks:

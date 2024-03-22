@@ -3,12 +3,14 @@ import time
 import random
 import logging
 import traceback
+import threading
 import torch
 import torch.multiprocessing as multiprocessing
 import torch._dynamo.config
 import torch._inductor.config
 
 from torch.multiprocessing import Queue
+from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
 from functools import wraps
 from torch.cuda import is_bf16_supported
@@ -178,14 +180,14 @@ def process_segments(
     seq = torch.stack([tokenizer.encode(prefix) for prefix in prefixes]).cuda()
     eos_idxs = torch.tensor([MAX_BLOCK_LEN for _ in prefixes], dtype=torch.int)
 
-    for idx in (
-        pbar := tqdm(
-            range(min_prefix_len, MAX_BLOCK_LEN - 1),
-            total=MAX_BLOCK_LEN - (min_prefix_len + 1),
-            leave=False,
-        )
-    ):
-        # for idx in range(min_prefix_len, MAX_BLOCK_LEN - 1):
+    # for idx in (
+    #     pbar := tqdm(
+    #         range(min_prefix_len, MAX_BLOCK_LEN - 1),
+    #         total=MAX_BLOCK_LEN - (min_prefix_len + 1),
+    #         leave=False,
+    #     )
+    # ):
+    for idx in range(min_prefix_len, MAX_BLOCK_LEN - 1):
         with torch.backends.cuda.sdp_kernel(
             enable_flash=False, enable_mem_efficient=False, enable_math=True
         ):
@@ -265,8 +267,8 @@ def gpu_manager(
         )
     decode_token = torch.compile(
         decode_token,
-        mode="reduce-overhead",
-        # mode="max-autotune",
+        # mode="reduce-overhead",
+        mode="max-autotune",
         fullgraph=True,
     )
 
@@ -343,7 +345,7 @@ def gpu_batch_manager(
         tasks = []
         while True:
             try:
-                task, pid = gpu_task_queue.get(timeout=0.1)
+                task, pid = gpu_task_queue.get(timeout=0.2)
             except Exception as e:
                 pass
             else:
@@ -406,11 +408,11 @@ def _truncate_seq(
         random.shuffle(unclosed_notes)
         return [("prev", p) for p in unclosed_notes] + [tokenizer.bos_tok]
     else:
-        _mid_dict = tokenizer._detokenize_midi_dict(seq, LEN_MS)
         try:
+            _mid_dict = tokenizer._detokenize_midi_dict(seq, LEN_MS)
             res = tokenizer._tokenize_midi_dict(_mid_dict, start_ms, end_ms - 1)
         except Exception as e:
-            logger.error(f"Truncate failed: {e}")
+            logger.error(f"Truncate segment failed: {e}")
             return [tokenizer.bos_tok]
         else:
             if res[-1] == tokenizer.eos_tok:
@@ -422,10 +424,10 @@ def transcribe_file(
     file_path,
     gpu_task_queue: Queue,
     result_queue: Queue,
+    pid: int,
     tokenizer: AmtTokenizer = AmtTokenizer(),
 ):
     logger = logging.getLogger(__name__)
-    pid = multiprocessing.current_process().pid
 
     logger.info(f"Getting wav segments: {file_path}")
     audio_segments = [
@@ -445,7 +447,7 @@ def transcribe_file(
         gpu_task_queue.put(((audio_seg, seq), pid))
         while True:
             # Issue with this logic perhaps
-            gpu_result = result_queue.get(timeout=100)
+            gpu_result = result_queue.get(timeout=300)
             if gpu_result["pid"] == pid:
                 seq = gpu_result["result"]
                 break
@@ -466,6 +468,7 @@ def transcribe_file(
             logger.info(f"Finished segment (eos_tok): {file_path}")
         else:
             # This might need it's logic adjusted
+            
             seq = _truncate_seq(
                 seq,
                 CHUNK_LEN_MS,
@@ -475,23 +478,29 @@ def transcribe_file(
 
             if len(seq) == 1:
                 logger.error(
-                    f"Finished segment (failed to transcribe): {file_path}"
+                    f"Failed to transcribe segment: {file_path}"
                 )
                 if len(concat_seq) > 500:
-                    logger.info(f"Sequence too short ({len(concat_seq)})")
                     res.append(concat_seq)
+                else:
+                    pass
+                    # logger.info(f"Sequence too short ({len(concat_seq)})")
+
                 seq = [tokenizer.bos_tok]
                 concat_seq = [tokenizer.bos_tok]
 
     return res
 
 
-def worker(
+def process_file(
+    file_path: str,
     file_queue: Queue,
     gpu_task_queue: Queue,
     result_queue: Queue,
+    tokenizer: AmtTokenizer,
     save_dir: str,
-    input_dir: str | None = None,
+    input_dir: str,
+    logger: logging.Logger,
 ):
     def _save_seq(_seq: list, _save_path: str):
         if os.path.exists(_save_path):
@@ -545,39 +554,57 @@ def worker(
 
         return num_removed
 
-    logger = _setup_logger()
-    pid = multiprocessing.current_process().pid
+    pid = threading.get_ident()
     try:
-        tokenizer = AmtTokenizer()
-        files_processed = 0
-        while not file_queue.empty():
-            file_path = file_queue.get(timeout=300)
+        seqs = transcribe_file(file_path, gpu_task_queue, result_queue, pid=pid)
+    except Exception as e:
+        logger.error(f"Failed to process {file_path}: {traceback.format_exc()}")
+        task_rmv_cnt = remove_failures_from_queue_(gpu_task_queue, pid)
+        res_rmv_cnt = remove_failures_from_queue_(result_queue, pid)
+        logger.info(f"Removed {task_rmv_cnt} from task queue")
+        logger.info(f"Removed {res_rmv_cnt} from result queue")
+        return
 
-            try:
-                seqs = transcribe_file(file_path, gpu_task_queue, result_queue)
-            except Exception as e:
-                logger.error(
-                    f"Failed to process {file_path}: {traceback.format_exc()}"
-                )
-                task_rmv_cnt = remove_failures_from_queue_(gpu_task_queue, pid)
-                res_rmv_cnt = remove_failures_from_queue_(result_queue, pid)
-                logger.info(f"Removed {task_rmv_cnt} from task queue")
-                logger.info(f"Removed {res_rmv_cnt} from result queue")
-                continue
+    logger.info(f"Finished file: {file_path}")
+    _idx = 0
+    for seq in seqs:
+        if len(seq) < 1000:
+            logger.info("Skipping seq - too short")
+            continue
+        _save_seq(seq, _get_save_path(file_path, _idx))
+        _idx += 1
 
-            logger.info(f"Finished file: {file_path}")
-            logger.info(f"Transcribed  into {len(seqs)} segment(s)")
-            _idx = 0
-            for seq in seqs:
-                if len(seq) < 1000:
-                    logger.info("Skipping seq - too short")
-                    continue
-                _save_seq(seq, _get_save_path(file_path, _idx))
-                _idx += 1
+    logger.info(f"Transcribed  into {_idx} segment(s)")
+    logger.info(f"{file_queue.qsize()} file(s) remaining in queue")
 
-            files_processed += 1
-            logger.info(f"{file_queue.qsize()} file(s) remaining in queue")
 
+def worker(
+    file_queue: Queue,
+    gpu_task_queue: Queue,
+    result_queue: Queue,
+    save_dir: str,
+    input_dir: str | None = None,
+    tasks_per_worker: int = 1,
+):
+    logger = _setup_logger()
+    tokenizer = AmtTokenizer()
+    threads = []
+    try:
+        while not file_queue.empty() or any(t.is_alive() for t in threads):
+            while len(threads) < tasks_per_worker and not file_queue.empty():
+                logging.info("Starting worker")
+                file_path = file_queue.get()
+                t = threading.Thread(target=process_file, args=(file_path, file_queue, gpu_task_queue, result_queue, tokenizer, save_dir, input_dir, logger))
+                t.start()
+                threads.append(t)
+            
+            threads = [t for t in threads if t.is_alive()]
+            
+            time.sleep(0.1)  
+            
+        for t in threads:
+            t.join()
+            
     except Exception as e:
         logger.error(f"File worker failed with exception: {e}")
     finally:
@@ -602,6 +629,7 @@ def batch_transcribe(
         os.remove("transcribe.log")
 
     if quantize is True:
+        logger.info("Quantising weights to int8")
         model = quantize_int8(model)
 
     gpu_task_queue = Queue()
@@ -611,7 +639,7 @@ def batch_transcribe(
     for file_path in file_paths:
         file_queue.put(file_path)
 
-    num_workers = min(4 * batch_size * num_gpus, len(file_paths))
+    num_workers = min(batch_size * num_gpus, len(file_paths))
     logger.info(f"Creating {num_workers} file worker(s)")
     worker_processes = [
         multiprocessing.Process(
@@ -622,6 +650,8 @@ def batch_transcribe(
                 result_queue,
                 save_dir,
                 input_dir,
+    # Wait for all threads to finish
+                4,
             ),
         )
         for _ in range(num_workers)

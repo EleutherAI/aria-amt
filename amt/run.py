@@ -38,6 +38,12 @@ def _add_transcribe_args(subparser):
     subparser.add_argument(
         "-multi_gpu", help="use all GPUs", action="store_true", default=False
     )
+    subparser.add_argument(
+        "-q8",
+        help="apply int8 quantization on weights",
+        action="store_true",
+        default=False,
+    )
     subparser.add_argument("-bs", help="batch size", type=int, default=16)
 
 
@@ -114,7 +120,6 @@ def transcribe(
     load_dir=None,
     batch_size=16,
     multi_gpu=False,
-    augment=None,
 ):
     """
     Transcribe audio files to midi using the given model and checkpoint.

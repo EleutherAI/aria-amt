@@ -152,7 +152,6 @@ class CrossAttention(nn.Module):
         xa: Tensor,
         xa_input_pos: Tensor,
     ):
-
         q = self.query(x)
         batch_size, target_seq_len, _ = q.shape
         q = q.view(

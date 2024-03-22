@@ -465,8 +465,12 @@ def _train(
             _epoch=resume_epoch,
             _resume_step=resume_step,
         )
-        avg_val_loss = val_loop(dataloader=val_dataloader, _epoch=resume_epoch, aug=False)
-        avg_val_loss_aug = val_loop(dataloader=val_dataloader, _epoch=resume_epoch, aug=True)
+        avg_val_loss = val_loop(
+            dataloader=val_dataloader, _epoch=resume_epoch, aug=False
+        )
+        avg_val_loss_aug = val_loop(
+            dataloader=val_dataloader, _epoch=resume_epoch, aug=True
+        )
         if accelerator.is_main_process:
             epoch_writer.writerow(
                 [resume_epoch, avg_train_loss, avg_val_loss, avg_val_loss_aug]
