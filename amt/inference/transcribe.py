@@ -282,7 +282,7 @@ def gpu_manager(
     try:
         while True:
             try:
-                batch = gpu_batch_queue.get(timeout=10)
+                batch = gpu_batch_queue.get(timeout=30)
             except Exception as e:
                 logger.info(f"GPU timed out waiting for batch")
                 break
@@ -349,7 +349,7 @@ def gpu_batch_manager(
         tasks = []
         while True:
             try:
-                task, pid = gpu_task_queue.get(timeout=0.2)
+                task, pid = gpu_task_queue.get(timeout=0.5)
             except Exception as e:
                 pass
             else:
@@ -453,7 +453,6 @@ def transcribe_file(
         # Add to gpu queue and wait for results
         gpu_task_queue.put(((audio_seg, seq), pid))
         while True:
-            # Issue with this logic perhaps
             gpu_result = result_queue.get()
             if gpu_result["pid"] == pid:
                 seq = gpu_result["result"]
@@ -545,7 +544,7 @@ def process_file(
         _buff = []
         while True:
             try:
-                _buff.append(_queue(timout=5))
+                _buff.append(_queue.get(timeout=5))
             except Exception:
                 break
 
@@ -699,7 +698,7 @@ def batch_transcribe(
         ]
     else:
         gpu_manager_processes = [
-            multiprocessing.Process(
+            torch.multiprocessing.Process(
                 target=gpu_manager,
                 args=(
                     gpu_batch_queue,
