@@ -110,12 +110,12 @@ def update_seq_end_idxs_(
     prefix_lens: torch.Tensor,
     idx: int,
 ):
-    # Update eos_idxs if next tok is eos_tok
-    eos_mask = next_tok_ids == 1
+    # Update eos_idxs if next tok is eos_tok and not eos_id < idx
+    eos_mask = (next_tok_ids == 1) & (eos_idxs > idx)
     eos_idxs[eos_mask] = idx
 
     # Update eos_idxs if next tok in onset > 20000
-    offset_mask = next_tok_ids >= 2418
+    offset_mask = (next_tok_ids >= 2418) & (eos_idxs > idx)
     eos_idxs[offset_mask] = idx - 2
 
     # Don't update toks in prefix or after eos_idx
@@ -172,13 +172,15 @@ def process_segments(
     raw_prefixes = [prefix for (audio_seg, prefix), _ in tasks]
     prefix_lens = torch.tensor(
         [len(prefix) for prefix in raw_prefixes], dtype=torch.int
-    )
+    ).cuda()
     min_prefix_len = min(prefix_lens).item()
     prefixes = [
         tokenizer.trunc_seq(prefix, MAX_BLOCK_LEN) for prefix in raw_prefixes
     ]
     seq = torch.stack([tokenizer.encode(prefix) for prefix in prefixes]).cuda()
-    eos_idxs = torch.tensor([MAX_BLOCK_LEN for _ in prefixes], dtype=torch.int)
+    eos_idxs = torch.tensor(
+        [MAX_BLOCK_LEN for _ in prefixes], dtype=torch.int
+    ).cuda()
 
     # for idx in (
     #     pbar := tqdm(
@@ -413,7 +415,10 @@ def _truncate_seq(
         return [("prev", p) for p in unclosed_notes] + [tokenizer.bos_tok]
     else:
         _mid_dict = tokenizer._detokenize_midi_dict(seq, LEN_MS)
-        res = tokenizer._tokenize_midi_dict(_mid_dict, start_ms, end_ms - 1)
+        if len(_mid_dict.note_msgs) == 0:
+            return [tokenizer.bos_tok]
+        else:
+            res = tokenizer._tokenize_midi_dict(_mid_dict, start_ms, end_ms - 1)
 
         if res[-1] == tokenizer.eos_tok:
             res.pop()
@@ -433,7 +438,9 @@ def transcribe_file(
     audio_segments = [
         f
         for f, _ in get_wav_mid_segments(
-            audio_path=file_path, stride_factor=STRIDE_FACTOR
+            audio_path=file_path,
+            stride_factor=STRIDE_FACTOR,
+            pad_last=True,
         )
     ]
 
@@ -454,29 +461,37 @@ def transcribe_file(
             else:
                 result_queue.put(gpu_result)
 
-        concat_seq += _shift_onset(
-            seq[init_idx:],
-            idx * CHUNK_LEN_MS,
-        )
-
-        if idx == len(audio_segments) - 1:
-            res.append(concat_seq)
-        elif concat_seq[-1] == tokenizer.eos_tok:
-            res.append(concat_seq)
+        try:
+            next_seq = _truncate_seq(
+                seq,
+                CHUNK_LEN_MS,
+                LEN_MS - CHUNK_LEN_MS,
+                logger=logger,
+            )
+        except Exception as e:
+            logger.info(
+                f"Skipping segment {idx} (failed to transcribe): {file_path}"
+            )
+            logger.error(traceback.format_exc())
             seq = [tokenizer.bos_tok]
-            concat_seq = [tokenizer.bos_tok]
-            logger.info(f"Finished segment (eos_tok): {file_path}")
         else:
-            try:
-                seq = _truncate_seq(
-                    seq,
-                    CHUNK_LEN_MS,
-                    LEN_MS - CHUNK_LEN_MS,
-                    logger=logger,
+            if len(next_seq) == 1:
+                logger.info(f"Skipping segment {idx} (silence): {file_path}")
+            else:
+                concat_seq += _shift_onset(
+                    seq[init_idx:],
+                    idx * CHUNK_LEN_MS,
                 )
-            except Exception as e:
-                logger.info(f"Skipping segment (failed to transcribe): {file_path}")
+
+            if concat_seq[-1] == tokenizer.eos_tok:
+                res.append(concat_seq)
                 seq = [tokenizer.bos_tok]
+                concat_seq = [tokenizer.bos_tok]
+                logger.info(f"Finished segment {idx} (eos_tok): {file_path}")
+            else:
+                seq = next_seq
+
+    res.append(concat_seq)
 
     return res
 
@@ -560,6 +575,10 @@ def process_file(
         if len(seq) < 500:
             logger.info("Skipping seq - too short")
         else:
+            logger.debug(
+                f"Saving seq of length {len(seq)} from file: {file_path}"
+            )
+
             _save_seq(seq, _get_save_path(file_path, _idx))
             _idx += 1
 
@@ -634,7 +653,9 @@ def batch_transcribe(
         logger.info("Quantising weights to int8")
         model = quantize_int8(model)
 
-    num_workers = min(batch_size * num_gpus, len(file_paths), multiprocessing.cpu_count())
+    num_workers = min(
+        batch_size * num_gpus, len(file_paths), multiprocessing.cpu_count()
+    )
     gpu_task_queue = Queue(num_workers * 4)
     gpu_batch_queue = Queue(1)
     result_queue = Queue(num_workers * 4)
@@ -667,14 +688,27 @@ def batch_transcribe(
         gpu_manager_processes = [
             torch.multiprocessing.Process(
                 target=gpu_manager,
-                args=(gpu_batch_queue, result_queue, model, batch_size, compile),
+                args=(
+                    gpu_batch_queue,
+                    result_queue,
+                    model,
+                    batch_size,
+                    compile,
+                ),
             )
         ]
     else:
         gpu_manager_processes = [
             multiprocessing.Process(
                 target=gpu_manager,
-                args=(gpu_batch_queue, result_queue, model, batch_size, compile, gpu_id),
+                args=(
+                    gpu_batch_queue,
+                    result_queue,
+                    model,
+                    batch_size,
+                    compile,
+                    gpu_id,
+                ),
             )
             for gpu_id in gpu_ids
         ]

@@ -24,6 +24,7 @@ def get_wav_mid_segments(
     mid_path: str = "",
     return_json: bool = False,
     stride_factor: int | None = None,
+    pad_last=False,
 ):
     """This function yields tuples of matched log mel spectrograms and
     tokenized sequences (np.array, list). If it is given only an audio path
@@ -61,10 +62,12 @@ def get_wav_mid_segments(
 
     # Create features
     total_samples = wav.shape[-1]
+    pad_factor = 2 if pad_last is True else 1
     res = []
     for idx in range(
         0,
-        total_samples - (num_samples - num_samples // stride_factor),
+        total_samples
+        - (num_samples - pad_factor * (num_samples // stride_factor)),
         num_samples // stride_factor,
     ):
         audio_feature = pad_or_trim(wav[idx:], length=num_samples)

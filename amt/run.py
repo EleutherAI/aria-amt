@@ -127,7 +127,7 @@ def transcribe(
     batch_size=16,
     multi_gpu=False,
     quantize=False,
-    compile=False, 
+    compile=False,
 ):
     """
     Transcribe audio files to midi using the given model and checkpoint.
