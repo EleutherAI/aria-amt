@@ -44,6 +44,12 @@ def _add_transcribe_args(subparser):
         action="store_true",
         default=False,
     )
+    subparser.add_argument(
+        "-compile",
+        help="use the pytorch compiler to generate a cuda graph",
+        action="store_true",
+        default=False,
+    )
     subparser.add_argument("-bs", help="batch size", type=int, default=16)
 
 
@@ -120,6 +126,8 @@ def transcribe(
     load_dir=None,
     batch_size=16,
     multi_gpu=False,
+    quantize=False,
+    compile=False, 
 ):
     """
     Transcribe audio files to midi using the given model and checkpoint.
@@ -205,6 +213,8 @@ def transcribe(
             batch_size=batch_size,
             input_dir=load_dir,
             gpu_ids=gpu_ids,
+            quantize=quantize,
+            compile=compile,
         )
 
     else:
@@ -214,6 +224,8 @@ def transcribe(
             save_dir=save_dir,
             batch_size=batch_size,
             input_dir=load_dir,
+            quantize=quantize,
+            compile=compile,
         )
 
 
@@ -255,6 +267,8 @@ def main():
             save_dir=args.save_dir,
             batch_size=args.bs,
             multi_gpu=args.multi_gpu,
+            quantize=args.q8,
+            compile=args.compile,
         )
     else:
         print("Unrecognized command")

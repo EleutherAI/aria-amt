@@ -4,13 +4,13 @@ import random
 import logging
 import traceback
 import threading
+import multiprocessing
 import torch
-import torch.multiprocessing as multiprocessing
+import torch.multiprocessing
 import torch._dynamo.config
 import torch._inductor.config
 
-from torch.multiprocessing import Queue
-from concurrent.futures import ThreadPoolExecutor
+from multiprocessing import Queue
 from tqdm import tqdm
 from functools import wraps
 from torch.cuda import is_bf16_supported
@@ -249,6 +249,7 @@ def gpu_manager(
     result_queue: Queue,
     model: AmtEncoderDecoder,
     batch_size: int,
+    compile: bool = False,
     gpu_id: int | None = None,
 ):
     logger = _setup_logger()
@@ -257,20 +258,21 @@ def gpu_manager(
     if gpu_id is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
 
-    global decode_token, recalculate_tok_ids
     model.decoder.setup_cache(batch_size=batch_size, max_seq_len=MAX_BLOCK_LEN)
     model.cuda()
     model.eval()
-    if batch_size == 1:
-        recalculate_tok_ids = torch.compile(
-            recalculate_tok_ids, mode="max-autotune-no-cudagraphs"
+    if compile is True:
+        global decode_token, recalculate_tok_ids
+        if batch_size == 1:
+            recalculate_tok_ids = torch.compile(
+                recalculate_tok_ids, mode="max-autotune-no-cudagraphs"
+            )
+        decode_token = torch.compile(
+            decode_token,
+            mode="reduce-overhead",
+            # mode="max-autotune",
+            fullgraph=True,
         )
-    decode_token = torch.compile(
-        decode_token,
-        # mode="reduce-overhead",
-        mode="max-autotune",
-        fullgraph=True,
-    )
 
     audio_transform = AudioTransform().cuda()
     tokenizer = AmtTokenizer(return_tensors=True)
@@ -280,7 +282,7 @@ def gpu_manager(
             try:
                 batch = gpu_batch_queue.get(timeout=10)
             except Exception as e:
-                logger.info(f"GPU timedout waiting for batch")
+                logger.info(f"GPU timed out waiting for batch")
                 break
             else:
                 try:
@@ -360,7 +362,9 @@ def gpu_batch_manager(
 
             # Get new batch and add to batch queue
             if len(tasks) < batch_size:
-                logger.info("Not enough tasks - padding batch")
+                logger.warning(
+                    f"Not enough tasks ({len(tasks)}) - padding batch"
+                )
             while len(tasks) < batch_size:
                 _pad_task, _pid = tasks[0]
                 tasks.append((_pad_task, -1))
@@ -408,16 +412,12 @@ def _truncate_seq(
         random.shuffle(unclosed_notes)
         return [("prev", p) for p in unclosed_notes] + [tokenizer.bos_tok]
     else:
-        try:
-            _mid_dict = tokenizer._detokenize_midi_dict(seq, LEN_MS)
-            res = tokenizer._tokenize_midi_dict(_mid_dict, start_ms, end_ms - 1)
-        except Exception as e:
-            logger.error(f"Truncate segment failed: {e}")
-            return [tokenizer.bos_tok]
-        else:
-            if res[-1] == tokenizer.eos_tok:
-                res.pop()
-            return res
+        _mid_dict = tokenizer._detokenize_midi_dict(seq, LEN_MS)
+        res = tokenizer._tokenize_midi_dict(_mid_dict, start_ms, end_ms - 1)
+
+        if res[-1] == tokenizer.eos_tok:
+            res.pop()
+        return res
 
 
 def transcribe_file(
@@ -447,7 +447,7 @@ def transcribe_file(
         gpu_task_queue.put(((audio_seg, seq), pid))
         while True:
             # Issue with this logic perhaps
-            gpu_result = result_queue.get(timeout=300)
+            gpu_result = result_queue.get()
             if gpu_result["pid"] == pid:
                 seq = gpu_result["result"]
                 break
@@ -467,25 +467,16 @@ def transcribe_file(
             concat_seq = [tokenizer.bos_tok]
             logger.info(f"Finished segment (eos_tok): {file_path}")
         else:
-            # This might need it's logic adjusted
-
-            seq = _truncate_seq(
-                seq,
-                CHUNK_LEN_MS,
-                LEN_MS - CHUNK_LEN_MS,
-                logger=logger,
-            )
-
-            if len(seq) == 1:
-                logger.error(f"Failed to transcribe segment: {file_path}")
-                if len(concat_seq) > 500:
-                    res.append(concat_seq)
-                else:
-                    pass
-                    # logger.info(f"Sequence too short ({len(concat_seq)})")
-
+            try:
+                seq = _truncate_seq(
+                    seq,
+                    CHUNK_LEN_MS,
+                    LEN_MS - CHUNK_LEN_MS,
+                    logger=logger,
+                )
+            except Exception as e:
+                logger.info(f"Skipping segment (failed to transcribe): {file_path}")
                 seq = [tokenizer.bos_tok]
-                concat_seq = [tokenizer.bos_tok]
 
     return res
 
@@ -566,11 +557,11 @@ def process_file(
     logger.info(f"Finished file: {file_path}")
     _idx = 0
     for seq in seqs:
-        if len(seq) < 1000:
+        if len(seq) < 500:
             logger.info("Skipping seq - too short")
-            continue
-        _save_seq(seq, _get_save_path(file_path, _idx))
-        _idx += 1
+        else:
+            _save_seq(seq, _get_save_path(file_path, _idx))
+            _idx += 1
 
     logger.info(f"Transcribed  into {_idx} segment(s)")
     logger.info(f"{file_queue.qsize()} file(s) remaining in queue")
@@ -629,7 +620,8 @@ def batch_transcribe(
     batch_size: int = 16,
     input_dir: str | None = None,
     gpu_ids: int | None = None,
-    quantize: bool = True,
+    quantize: bool = False,
+    compile: bool = False,
 ):
     torch.multiprocessing.set_start_method("spawn")
     num_gpus = len(gpu_ids) if gpu_ids is not None else 1
@@ -642,14 +634,14 @@ def batch_transcribe(
         logger.info("Quantising weights to int8")
         model = quantize_int8(model)
 
-    gpu_task_queue = Queue()
-    gpu_batch_queue = Queue()
-    result_queue = Queue()
-    file_queue = Queue()
+    num_workers = min(batch_size * num_gpus, len(file_paths), multiprocessing.cpu_count())
+    gpu_task_queue = Queue(num_workers * 4)
+    gpu_batch_queue = Queue(1)
+    result_queue = Queue(num_workers * 4)
+    file_queue = Queue(len(file_paths))
     for file_path in file_paths:
         file_queue.put(file_path)
 
-    num_workers = min(batch_size * num_gpus, len(file_paths))
     logger.info(f"Creating {num_workers} file worker(s)")
     worker_processes = [
         multiprocessing.Process(
@@ -660,7 +652,6 @@ def batch_transcribe(
                 result_queue,
                 save_dir,
                 input_dir,
-                # Wait for all threads to finish
                 4,
             ),
         )
@@ -674,16 +665,16 @@ def batch_transcribe(
     start_time = time.time()
     if num_gpus == 1:
         gpu_manager_processes = [
-            multiprocessing.Process(
+            torch.multiprocessing.Process(
                 target=gpu_manager,
-                args=(gpu_batch_queue, result_queue, model, batch_size),
+                args=(gpu_batch_queue, result_queue, model, batch_size, compile),
             )
         ]
     else:
         gpu_manager_processes = [
             multiprocessing.Process(
                 target=gpu_manager,
-                args=(gpu_batch_queue, result_queue, model, batch_size, gpu_id),
+                args=(gpu_batch_queue, result_queue, model, batch_size, compile, gpu_id),
             )
             for gpu_id in gpu_ids
         ]
