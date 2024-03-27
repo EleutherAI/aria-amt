@@ -349,7 +349,7 @@ def gpu_batch_manager(
         tasks = []
         while True:
             try:
-                task, pid = gpu_task_queue.get(timeout=0.5)
+                task, pid = gpu_task_queue.get(timeout=0.2)
             except Exception as e:
                 pass
             else:
@@ -471,23 +471,24 @@ def transcribe_file(
             logger.info(
                 f"Skipping segment {idx} (failed to transcribe): {file_path}"
             )
-            logger.error(traceback.format_exc())
+            logger.error(e)
+            logger.debug(seq)
             seq = [tokenizer.bos_tok]
         else:
+            if seq[-1] == tokenizer.eos_tok:
+                logger.info(f"Seen eos_tok at segment {idx}: {file_path}")
+                logger.debug(seq)
+                seq = seq[:-1]
+
             if len(next_seq) == 1:
                 logger.info(f"Skipping segment {idx} (silence): {file_path}")
+                logger.debug(seq)
+                seq = [tokenizer.bos_tok]
             else:
                 concat_seq += _shift_onset(
                     seq[init_idx:],
                     idx * CHUNK_LEN_MS,
                 )
-
-            if concat_seq[-1] == tokenizer.eos_tok:
-                res.append(concat_seq)
-                seq = [tokenizer.bos_tok]
-                concat_seq = [tokenizer.bos_tok]
-                logger.info(f"Finished segment {idx} (eos_tok): {file_path}")
-            else:
                 seq = next_seq
 
     res.append(concat_seq)
@@ -653,7 +654,9 @@ def batch_transcribe(
         model = quantize_int8(model)
 
     num_workers = min(
-        batch_size * num_gpus, len(file_paths), multiprocessing.cpu_count()
+        batch_size * num_gpus,
+        len(file_paths),
+        multiprocessing.cpu_count() - num_gpus,
     )
     gpu_task_queue = Queue(num_workers * 4)
     gpu_batch_queue = Queue(1)

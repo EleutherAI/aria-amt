@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import argparse
-import sys
 import os
 import glob
 
@@ -11,7 +10,6 @@ from csv import DictReader
 # TODO: Implement a way of inferring the tokenizer name automatically
 def _add_maestro_args(subparser):
     subparser.add_argument("dir", help="MAESTRO directory path")
-    subparser.add_argument("csv", help="MAESTRO csv path")
     subparser.add_argument("-train", help="train save path", required=True)
     subparser.add_argument("-val", help="val save path", required=True)
     subparser.add_argument("-test", help="test save path", required=True)
@@ -31,6 +29,9 @@ def _add_transcribe_args(subparser):
     )
     subparser.add_argument(
         "-load_dir", help="dir containing mp3/wav files", required=False
+    )
+    subparser.add_argument(
+        "-maestro", help="get file paths from maestro val/test sets", action="store_true", default=False
     )
     subparser.add_argument(
         "-save_dir", help="dir to save midi files", required=True
@@ -53,27 +54,16 @@ def _add_transcribe_args(subparser):
     subparser.add_argument("-bs", help="batch size", type=int, default=16)
 
 
-def build_maestro(
-    maestro_dir, maestro_csv_file, train_file, val_file, test_file, num_procs
-):
-    from amt.data import AmtDataset
-
+def get_matched_maestro_paths(maestro_dir):
     assert os.path.isdir(maestro_dir), "MAESTRO directory not found"
-    assert os.path.isfile(maestro_csv_file), "MAESTRO csv not found"
-    if os.path.isfile(train_file):
-        print(f"Dataset file already exists at {train_file} - removing")
-        os.remove(train_file)
-    if os.path.isfile(val_file):
-        print(f"Dataset file already exists at {val_file} - removing")
-        os.remove(val_file)
-    if os.path.isfile(test_file):
-        print(f"Dataset file already exists at {test_file} - removing")
-        os.remove(test_file)
+
+    maestro_csv_path = os.path.join(maestro_dir, "maestro-v3.0.0.csv")
+    assert os.path.isfile(maestro_csv_path), "MAESTRO csv not found"
 
     matched_paths_train = []
     matched_paths_val = []
     matched_paths_test = []
-    with open(maestro_csv_file, "r") as f:
+    with open(maestro_csv_path, "r") as f:
         dict_reader = DictReader(f)
         for entry in dict_reader:
             audio_path = os.path.normpath(
@@ -97,6 +87,29 @@ def build_maestro(
                 matched_paths_test.append((audio_path, midi_path))
             else:
                 print("Invalid split")
+
+    return matched_paths_train, matched_paths_val, matched_paths_test
+
+
+def build_maestro(
+    maestro_dir, train_file, val_file, test_file, num_procs
+):
+    from amt.data import AmtDataset
+    if os.path.isfile(train_file):
+        print(f"Dataset file already exists at {train_file} - removing")
+        os.remove(train_file)
+    if os.path.isfile(val_file):
+        print(f"Dataset file already exists at {val_file} - removing")
+        os.remove(val_file)
+    if os.path.isfile(test_file):
+        print(f"Dataset file already exists at {test_file} - removing")
+        os.remove(test_file)
+
+    (
+        matched_paths_train,
+        matched_paths_val,
+        matched_paths_test,
+    ) = get_matched_maestro_paths(maestro_dir)
 
     print(f"Building {train_file}")
     AmtDataset.build(
@@ -124,6 +137,7 @@ def transcribe(
     save_dir,
     load_path=None,
     load_dir=None,
+    maestro=False,
     batch_size=16,
     multi_gpu=False,
     quantize=False,
@@ -166,7 +180,10 @@ def transcribe(
         trans_mode = "single"
     if load_dir:
         assert os.path.isdir(load_dir), "load directory doesn't exist"
-        trans_mode = "batch"
+        if maestro is True:
+            trans_mode = "maestro"
+        else:
+            trans_mode = "batch"
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
     assert os.path.isdir(save_dir), "save dir doesn't exist"
@@ -197,10 +214,16 @@ def transcribe(
         )
         print(f"Found {len(found_mp3)} mp3 and {len(found_wav)} wav files")
         file_paths = found_mp3 + found_wav
+    elif trans_mode == "maestro":
+        matched_train_paths, matched_val_paths, matched_test_paths = get_matched_maestro_paths(load_dir)
+        val_mp3_paths = [ap for ap, mp in matched_val_paths]
+        test_mp3_paths = [ap for ap, mp in matched_test_paths]
+        file_paths = val_mp3_paths + test_mp3_paths
+        assert len(file_paths) == 314, "Invalid maestro files"
     else:
         file_paths = [load_path]
         batch_size = 1
-
+        
     if multi_gpu:
         gpu_ids = [
             int(id) for id in os.getenv("CUDA_VISIBLE_DEVICES").split(",")
@@ -252,7 +275,6 @@ def main():
     elif args.command == "maestro":
         build_maestro(
             maestro_dir=args.dir,
-            maestro_csv_file=args.csv,
             train_file=args.train,
             val_file=args.val,
             test_file=args.test,
@@ -264,6 +286,7 @@ def main():
             checkpoint_path=args.checkpoint_path,
             load_path=args.load_path,
             load_dir=args.load_dir,
+            maestro=args.maestro,
             save_dir=args.save_dir,
             batch_size=args.bs,
             multi_gpu=args.multi_gpu,
