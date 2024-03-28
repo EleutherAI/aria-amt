@@ -32,15 +32,17 @@ STRIDE_FACTOR = 3
 CHUNK_LEN_MS = LEN_MS // STRIDE_FACTOR
 
 
-def _setup_logger():
+def _setup_logger(name: str | None = None):
+    logger_name = f"[{name}] " if name else ""
     logger = logging.getLogger(__name__)
     for h in logger.handlers[:]:
         logger.removeHandler(h)
 
     logger.propagate = False
     logger.setLevel(logging.DEBUG)
+    # Adjust the formatter to include the name before the PID if provided
     formatter = logging.Formatter(
-        "[%(asctime)s] %(process)d: [%(levelname)s] %(message)s",
+        f"[%(asctime)s] {logger_name}%(process)d: [%(levelname)s] %(message)s",
     )
 
     ch = logging.StreamHandler()
@@ -246,7 +248,6 @@ def process_segments(
     return results
 
 
-# There is a memory leak in here somewhere
 def gpu_manager(
     gpu_batch_queue: Queue,
     result_queue: Queue,
@@ -255,7 +256,7 @@ def gpu_manager(
     compile: bool = False,
     gpu_id: int | None = None,
 ):
-    logger = _setup_logger()
+    logger = _setup_logger(name="GPU")
     logger.info("Started GPU manager")
 
     if gpu_id is not None:
@@ -344,7 +345,7 @@ def gpu_batch_manager(
     gpu_batch_queue: Queue,
     batch_size: int,
 ):
-    logger = _setup_logger()
+    logger = _setup_logger(name="B")
     logger.info("Started batch manager")
     try:
         tasks = []
@@ -454,12 +455,16 @@ def transcribe_file(
         # Add to gpu queue and wait for results
         gpu_task_queue.put(((audio_seg, seq), pid))
         while True:
-            gpu_result = result_queue.get()
-            if gpu_result["pid"] == pid:
-                seq = gpu_result["result"]
-                break
+            try:
+                gpu_result = result_queue.get(timeout=0.1)
+            except Exception as e:
+                pass
             else:
-                result_queue.put(gpu_result)
+                if gpu_result["pid"] == pid:
+                    seq = gpu_result["result"]
+                    break
+                else:
+                    result_queue.put(gpu_result)
 
         try:
             next_seq = _truncate_seq(
@@ -472,18 +477,15 @@ def transcribe_file(
             logger.info(
                 f"Skipping segment {idx} (failed to transcribe): {file_path}"
             )
-            logger.error(e)
-            logger.debug(seq)
+            logger.debug(traceback.format_exc())
             seq = [tokenizer.bos_tok]
         else:
             if seq[-1] == tokenizer.eos_tok:
                 logger.info(f"Seen eos_tok at segment {idx}: {file_path}")
-                logger.debug(seq)
                 seq = seq[:-1]
 
             if len(next_seq) == 1:
                 logger.info(f"Skipping segment {idx} (silence): {file_path}")
-                logger.debug(seq)
                 seq = [tokenizer.bos_tok]
             else:
                 concat_seq += _shift_onset(
@@ -524,6 +526,8 @@ def process_file(
             mid.save(_save_path)
         except Exception as e:
             logger.error(f"Failed to save {_save_path}")
+            logger.debug(traceback.format_exc())
+            logger.debug(_seq)
 
     def _get_save_path(_file_path: str, _idx: int | str = ""):
         if input_dir is None:
@@ -608,7 +612,7 @@ def worker(
     input_dir: str | None = None,
     tasks_per_worker: int = 1,
 ):
-    logger = _setup_logger()
+    logger = _setup_logger(name="F")
     tokenizer = AmtTokenizer()
     threads = []
     try:
@@ -668,13 +672,13 @@ def batch_transcribe(
         logger.info("Quantising decoder weights to int8")
         model.decoder = quantize_int8(model.decoder)
 
-    num_workers = max(
-        min(batch_size * num_gpus, len(file_paths)),
-        multiprocessing.cpu_count() - num_gpus,
+    num_workers = min(
+        max(batch_size * num_gpus, multiprocessing.cpu_count() - num_gpus),
+        len(file_paths),
     )
-    gpu_task_queue = Queue(num_workers * 4)
+    gpu_task_queue = Queue(num_workers * 3)
     gpu_batch_queue = Queue(1)
-    result_queue = Queue(num_workers * 4)
+    result_queue = Queue(num_workers * 3)
     file_queue = Queue(len(file_paths))
     for file_path in file_paths:
         file_queue.put(file_path)
@@ -690,7 +694,7 @@ def batch_transcribe(
                 result_queue,
                 save_dir,
                 input_dir,
-                4,
+                3,
             ),
         )
         for _ in range(num_workers)
@@ -749,9 +753,11 @@ def batch_transcribe(
         for p in gpu_manager_processes:
             p.join()
 
-    gpu_batch_manager_process.terminate()
     for p in worker_processes:
         p.terminate()
+
+    gpu_batch_manager_process.terminate()
+    watchdog_process.terminate()
 
     print("Took", (time.time() - start_time) / 60, "mins to transcribe files")
 

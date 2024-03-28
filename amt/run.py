@@ -31,7 +31,10 @@ def _add_transcribe_args(subparser):
         "-load_dir", help="dir containing mp3/wav files", required=False
     )
     subparser.add_argument(
-        "-maestro", help="get file paths from maestro val/test sets", action="store_true", default=False
+        "-maestro",
+        help="get file paths from maestro val/test sets",
+        action="store_true",
+        default=False,
     )
     subparser.add_argument(
         "-save_dir", help="dir to save midi files", required=True
@@ -91,10 +94,9 @@ def get_matched_maestro_paths(maestro_dir):
     return matched_paths_train, matched_paths_val, matched_paths_test
 
 
-def build_maestro(
-    maestro_dir, train_file, val_file, test_file, num_procs
-):
+def build_maestro(maestro_dir, train_file, val_file, test_file, num_procs):
     from amt.data import AmtDataset
+
     if os.path.isfile(train_file):
         print(f"Dataset file already exists at {train_file} - removing")
         os.remove(train_file)
@@ -215,7 +217,9 @@ def transcribe(
         print(f"Found {len(found_mp3)} mp3 and {len(found_wav)} wav files")
         file_paths = found_mp3 + found_wav
     elif trans_mode == "maestro":
-        matched_train_paths, matched_val_paths, matched_test_paths = get_matched_maestro_paths(load_dir)
+        matched_train_paths, matched_val_paths, matched_test_paths = (
+            get_matched_maestro_paths(load_dir)
+        )
         val_mp3_paths = [ap for ap, mp in matched_val_paths]
         test_mp3_paths = [ap for ap, mp in matched_test_paths]
         file_paths = val_mp3_paths + test_mp3_paths
@@ -223,7 +227,7 @@ def transcribe(
     else:
         file_paths = [load_path]
         batch_size = 1
-        
+
     if multi_gpu:
         gpu_ids = [
             int(id) for id in os.getenv("CUDA_VISIBLE_DEVICES").split(",")
