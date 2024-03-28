@@ -1,4 +1,5 @@
 import os
+import signal
 import time
 import random
 import logging
@@ -579,11 +580,24 @@ def process_file(
                 f"Saving seq of length {len(seq)} from file: {file_path}"
             )
 
-            _save_seq(seq, _get_save_path(file_path, _idx))
+            _save_seq(seq, _get_save_path(file_path))
             _idx += 1
 
     logger.info(f"Transcribed  into {_idx} segment(s)")
     logger.info(f"{file_queue.qsize()} file(s) remaining in queue")
+
+
+def watchdog(main_gpu_pid: int, child_pids: list):
+    while True:
+        if not os.path.exists(f"/proc/{main_gpu_pid}"):
+            print("Cleaning up children...")
+            for pid in child_pids:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+            return
+        time.sleep(1)
 
 
 def worker(
@@ -642,6 +656,7 @@ def batch_transcribe(
     quantize: bool = False,
     compile: bool = False,
 ):
+    assert os.name == "posix", "UNIX/LINUX is the only supported OS"
     torch.multiprocessing.set_start_method("spawn")
     num_gpus = len(gpu_ids) if gpu_ids is not None else 1
     logger = _setup_logger()
@@ -650,12 +665,11 @@ def batch_transcribe(
         os.remove("transcribe.log")
 
     if quantize is True:
-        logger.info("Quantising weights to int8")
-        model = quantize_int8(model)
+        logger.info("Quantising decoder weights to int8")
+        model.decoder = quantize_int8(model.decoder)
 
-    num_workers = min(
-        batch_size * num_gpus,
-        len(file_paths),
+    num_workers = max(
+        min(batch_size * num_gpus, len(file_paths)),
         multiprocessing.cpu_count() - num_gpus,
     )
     gpu_task_queue = Queue(num_workers * 4)
@@ -665,6 +679,7 @@ def batch_transcribe(
     for file_path in file_paths:
         file_queue.put(file_path)
 
+    child_pids = []
     logger.info(f"Creating {num_workers} file worker(s)")
     worker_processes = [
         multiprocessing.Process(
@@ -680,26 +695,22 @@ def batch_transcribe(
         )
         for _ in range(num_workers)
     ]
+
+    for p in worker_processes:
+        p.start()
+        child_pids.append(p.pid)
+
     gpu_batch_manager_process = multiprocessing.Process(
         target=gpu_batch_manager,
         args=(gpu_task_queue, gpu_batch_queue, batch_size),
     )
+    gpu_batch_manager_process.start()
+    child_pids.append(gpu_batch_manager_process.pid)
 
+    time.sleep(5)
     start_time = time.time()
-    if num_gpus == 1:
-        gpu_manager_processes = [
-            torch.multiprocessing.Process(
-                target=gpu_manager,
-                args=(
-                    gpu_batch_queue,
-                    result_queue,
-                    model,
-                    batch_size,
-                    compile,
-                ),
-            )
-        ]
-    else:
+
+    if num_gpus > 1:
         gpu_manager_processes = [
             torch.multiprocessing.Process(
                 target=gpu_manager,
@@ -714,20 +725,33 @@ def batch_transcribe(
             )
             for gpu_id in gpu_ids
         ]
+        for p in gpu_manager_processes:
+            p.start()
+        watchdog_process = multiprocessing.Process(
+            target=watchdog, args=(gpu_batch_manager_process[0].pid, child_pids)
+        )
+        watchdog_process.start()
+    else:
+        gpu_manager_processes = None
+        watchdog_process = multiprocessing.Process(
+            target=watchdog, args=(os.getpid(), child_pids)
+        )
+        watchdog_process.start()
+        gpu_manager(
+            gpu_batch_queue,
+            result_queue,
+            model,
+            batch_size,
+            compile,
+        )
 
-    for p in worker_processes:
-        p.start()
-    time.sleep(5)
-    gpu_batch_manager_process.start()
-    for p in gpu_manager_processes:
-        p.start()
+    if gpu_manager_processes is not None:
+        for p in gpu_manager_processes:
+            p.join()
 
-    # Watch for file workers to finish
-    for p in worker_processes:
-        p.join()
-    for p in gpu_manager_processes:
-        p.join()
     gpu_batch_manager_process.terminate()
+    for p in worker_processes:
+        p.terminate()
 
     print("Took", (time.time() - start_time) / 60, "mins to transcribe files")
 
