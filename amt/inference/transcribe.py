@@ -603,8 +603,7 @@ def watchdog(main_gpu_pid: int, child_pids: list):
                     os.kill(pid, signal.SIGTERM)
                 except ProcessLookupError:
                     pass
-        else:
-            print(f"{main_gpu_pid} still alive")
+
         time.sleep(1)
 
 
