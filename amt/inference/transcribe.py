@@ -1,17 +1,17 @@
 import os
+import sys
 import signal
 import time
 import random
 import logging
 import traceback
 import threading
-import multiprocessing
 import torch
-import torch.multiprocessing
+import torch.multiprocessing as multiprocessing
 import torch._dynamo.config
 import torch._inductor.config
 
-from multiprocessing import Queue
+from torch.multiprocessing import Queue
 from tqdm import tqdm
 from functools import wraps
 from torch.cuda import is_bf16_supported
@@ -139,6 +139,7 @@ def optional_bf16_autocast(func):
     return wrapper
 
 
+@torch.no_grad()
 def decode_token(
     model: AmtEncoderDecoder,
     x: torch.Tensor,
@@ -166,10 +167,9 @@ def process_segments(
     tokenizer: AmtTokenizer,
     logger: logging.Logger,
 ):
-    audio_segs = torch.stack(
-        [audio_seg for (audio_seg, prefix), _ in tasks]
-    ).cuda()
-    log_mels = audio_transform.log_mel(audio_segs)
+    log_mels = audio_transform.log_mel(
+        torch.stack([audio_seg.cuda() for (audio_seg, prefix), _ in tasks])
+    )
     audio_features = model.encoder(xa=log_mels)
 
     raw_prefixes = [prefix for (audio_seg, prefix), _ in tasks]
@@ -405,7 +405,6 @@ def _truncate_seq(
     seq: list,
     start_ms: int,
     end_ms: int,
-    logger: logging.Logger,
     tokenizer: AmtTokenizer = AmtTokenizer(),
 ):
     # Truncates and shifts a sequence by retokenizing the underlying midi_dict
@@ -449,11 +448,12 @@ def transcribe_file(
     res = []
     seq = [tokenizer.bos_tok]
     concat_seq = [tokenizer.bos_tok]
-    for idx, audio_seg in enumerate(audio_segments):
+    idx = 0
+    while audio_segments:
         init_idx = len(seq)
 
         # Add to gpu queue and wait for results
-        gpu_task_queue.put(((audio_seg, seq), pid))
+        gpu_task_queue.put(((audio_segments.pop(0), seq), pid))
         while True:
             try:
                 gpu_result = result_queue.get(timeout=0.1)
@@ -471,7 +471,6 @@ def transcribe_file(
                 seq,
                 CHUNK_LEN_MS,
                 LEN_MS - CHUNK_LEN_MS,
-                logger=logger,
             )
         except Exception as e:
             logger.info(
@@ -494,9 +493,33 @@ def transcribe_file(
                 )
                 seq = next_seq
 
+        idx += 1
+
     res.append(concat_seq)
 
     return res
+
+
+def get_save_path(
+    file_path: str,
+    input_dir: str,
+    save_dir: str,
+    idx: int | str = "",
+):
+    if input_dir is None:
+        save_path = os.path.join(
+            save_dir,
+            os.path.splitext(os.path.basename(file_path))[0] + f"{idx}.mid",
+        )
+    else:
+        input_rel_path = os.path.relpath(file_path, input_dir)
+        save_path = os.path.join(
+            save_dir, os.path.splitext(input_rel_path)[0] + f"{idx}.mid"
+        )
+        if not os.path.isdir(os.path.dirname(save_path)):
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+    return save_path
 
 
 def process_file(
@@ -529,23 +552,6 @@ def process_file(
             logger.debug(traceback.format_exc())
             logger.debug(_seq)
 
-    def _get_save_path(_file_path: str, _idx: int | str = ""):
-        if input_dir is None:
-            save_path = os.path.join(
-                save_dir,
-                os.path.splitext(os.path.basename(file_path))[0]
-                + f"{_idx}.mid",
-            )
-        else:
-            input_rel_path = os.path.relpath(_file_path, input_dir)
-            save_path = os.path.join(
-                save_dir, os.path.splitext(input_rel_path)[0] + f"{_idx}.mid"
-            )
-            if not os.path.isdir(os.path.dirname(save_path)):
-                os.makedirs(os.path.dirname(save_path), exist_ok=True)
-
-        return save_path
-
     def remove_failures_from_queue_(_queue: Queue, _pid: int):
         _buff = []
         while True:
@@ -575,7 +581,6 @@ def process_file(
         return
 
     logger.info(f"Finished file: {file_path}")
-    _idx = 0
     for seq in seqs:
         if len(seq) < 500:
             logger.info("Skipping seq - too short")
@@ -584,10 +589,8 @@ def process_file(
                 f"Saving seq of length {len(seq)} from file: {file_path}"
             )
 
-            _save_seq(seq, _get_save_path(file_path))
-            _idx += 1
+            _save_seq(seq, get_save_path(file_path, input_dir, save_dir))
 
-    logger.info(f"Transcribed  into {_idx} segment(s)")
     logger.info(f"{file_queue.qsize()} file(s) remaining in queue")
 
 
@@ -600,7 +603,8 @@ def watchdog(main_gpu_pid: int, child_pids: list):
                     os.kill(pid, signal.SIGTERM)
                 except ProcessLookupError:
                     pass
-            return
+        else:
+            print(f"{main_gpu_pid} still alive")
         time.sleep(1)
 
 
@@ -672,16 +676,24 @@ def batch_transcribe(
         logger.info("Quantising decoder weights to int8")
         model.decoder = quantize_int8(model.decoder)
 
-    num_workers = min(
-        max(batch_size * num_gpus, multiprocessing.cpu_count() - num_gpus),
-        len(file_paths),
-    )
-    gpu_task_queue = Queue(num_workers * 3)
-    gpu_batch_queue = Queue(1)
-    result_queue = Queue(num_workers * 3)
-    file_queue = Queue(len(file_paths))
+    file_queue = Queue()
     for file_path in file_paths:
-        file_queue.put(file_path)
+        if (
+            os.path.isfile(get_save_path(file_path, input_dir, save_dir))
+            is False
+        ):
+            file_queue.put(file_path)
+
+    logger.info(f"Files to process: {file_queue.qsize()}/{len(file_paths)}")
+
+    num_workers = min(
+        min(batch_size * num_gpus, multiprocessing.cpu_count() - num_gpus),
+        file_queue.qsize(),
+    )
+
+    gpu_task_queue = Queue()
+    gpu_batch_queue = Queue()
+    result_queue = Queue()
 
     child_pids = []
     logger.info(f"Creating {num_workers} file worker(s)")
@@ -716,7 +728,7 @@ def batch_transcribe(
 
     if num_gpus > 1:
         gpu_manager_processes = [
-            torch.multiprocessing.Process(
+            multiprocessing.Process(
                 target=gpu_manager,
                 args=(
                     gpu_batch_queue,
@@ -755,9 +767,12 @@ def batch_transcribe(
 
     for p in worker_processes:
         p.terminate()
+        p.join()
 
     gpu_batch_manager_process.terminate()
+    gpu_batch_manager_process.join()
     watchdog_process.terminate()
+    watchdog_process.join()
 
     print("Took", (time.time() - start_time) / 60, "mins to transcribe files")
 
