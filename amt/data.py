@@ -1,6 +1,8 @@
 import mmap
 import os
 import io
+import random
+import shlex
 import base64
 import shutil
 import orjson
@@ -89,6 +91,56 @@ def get_wav_mid_segments(
     return res
 
 
+def pianoteq_cmd_fn(mid_path: str, wav_path: str):
+    presets = [
+        "C. Bechstein",
+        "C. Bechstein Close Mic",
+        "C. Bechstein Under Lid",
+        "C. Bechstein 440",
+        "C. Bechstein Recording",
+        "C. Bechstein Werckmeister III",
+        "C. Bechstein Neidhardt III",
+        "C. Bechstein mesotonic",
+        "C. Bechstein well tempered",
+        "HB Steinway D Blues",
+        "HB Steinway D Pop",
+        "HB Steinway D New Age",
+        "HB Steinway D Prelude",
+        "HB Steinway D Felt I",
+        "HB Steinway D Felt II",
+        "HB Steinway Model D",
+        "HB Steinway D Classical Recording",
+        "HB Steinway D Jazz Recording",
+        "HB Steinway D Chamber Recording",
+        "HB Steinway D Studio Recording",
+        "HB Steinway D Intimate",
+        "HB Steinway D Cinematic",
+        "HB Steinway D Close Mic Classical",
+        "HB Steinway D Close Mic Jazz",
+        "HB Steinway D Player Wide",
+        "HB Steinway D Player Clean",
+        "HB Steinway D Trio",
+        "HB Steinway D Duo",
+        "HB Steinway D Cabaret",
+        "HB Steinway D Bright",
+        "HB Steinway D Hyper Bright",
+        "HB Steinway D Prepared",
+        "HB Steinway D Honky Tonk",
+    ]
+
+    preset = random.choice(presets)
+
+    # Safely quote the preset name, MIDI path, and WAV path
+    safe_preset = shlex.quote(preset)
+    safe_mid_path = shlex.quote(mid_path)
+    safe_wav_path = shlex.quote(wav_path)
+
+    # Construct the command
+    command = f"/home/mchorse/amt/pianoteq/x86-64bit/Pianoteq\\ 8\\ STAGE --preset {safe_preset} --midi {safe_mid_path} --wav {safe_wav_path}"
+
+    return command
+
+
 def write_features(audio_path: str, mid_path: str, save_path: str):
     features = get_wav_mid_segments(
         audio_path=audio_path,
@@ -124,7 +176,7 @@ def write_synth_features(cli_cmd_fn: Callable, mid_path: str, save_path: str):
 
     try:
         get_synth_audio(
-            cli_cmd=cli_cmd_fn, mid_path=mid_path, wav_path=audio_path_temp
+            cli_cmd_fn=cli_cmd_fn, mid_path=mid_path, wav_path=audio_path_temp
         )
     except:
         if os.path.isfile(audio_path_temp):
@@ -136,22 +188,27 @@ def write_synth_features(cli_cmd_fn: Callable, mid_path: str, save_path: str):
             mid_path=mid_path,
             return_json=False,
         )
-        os.remove(audio_path_temp)
+
+        if os.path.isfile(audio_path_temp):
+            os.remove(audio_path_temp)
 
     with open(save_path, mode="a") as file:
-        for wav, seq in features:
-            wav_buffer = io.BytesIO()
-            torch.save(wav, wav_buffer)
-            wav_buffer.seek(0)
-            wav_bytes = wav_buffer.read()
-            wav_str = base64.b64encode(wav_bytes).decode("utf-8")
-            file.write(wav_str)
-            file.write("\n")
+        try:
+            for wav, seq in features:
+                wav_buffer = io.BytesIO()
+                torch.save(wav, wav_buffer)
+                wav_buffer.seek(0)
+                wav_bytes = wav_buffer.read()
+                wav_str = base64.b64encode(wav_bytes).decode("utf-8")
+                file.write(wav_str)
+                file.write("\n")
 
-            seq_bytes = orjson.dumps(seq)
-            seq_str = base64.b64encode(seq_bytes).decode("utf-8")
-            file.write(seq_str)
-            file.write("\n")
+                seq_bytes = orjson.dumps(seq)
+                seq_str = base64.b64encode(seq_bytes).decode("utf-8")
+                file.write(seq_str)
+                file.write("\n")
+        except Exception as e:
+            return
 
 
 def build_worker_fn(load_path_queue, save_path_queue, _save_path: str):
@@ -328,7 +385,7 @@ class AmtDataset(torch.utils.data.Dataset):
             ]
         else:
             # Build synthetic dataset
-            assert len(load_paths[0]) == 1, "Invalid load paths"
+            assert isinstance(load_paths[0], str), "Invalid load paths"
             print("Building synthetic dataset")
             worker_processes = [
                 Process(

@@ -17,7 +17,20 @@ def _add_maestro_args(subparser):
         "-mp",
         help="number of processes to use",
         type=int,
-        required=False,
+        default=1,
+    )
+
+
+def _add_synth_args(subparser):
+    subparser.add_argument("dir", help="Directory containing MIDIs")
+    subparser.add_argument("csv", help="Split csv")
+    subparser.add_argument("-train", help="train save path", required=True)
+    subparser.add_argument("-test", help="test save path", required=True)
+    subparser.add_argument(
+        "-mp",
+        help="number of processes to use",
+        type=int,
+        default=1,
     )
 
 
@@ -55,6 +68,67 @@ def _add_transcribe_args(subparser):
         default=False,
     )
     subparser.add_argument("-bs", help="batch size", type=int, default=16)
+
+
+def get_synth_mid_paths(mid_dir: str, csv_path: str):
+    assert os.path.isdir(mid_dir), "directory doesn't exist"
+    assert os.path.isfile(csv_path), "csv not found"
+
+    train_paths = []
+    test_paths = []
+    with open(csv_path, "r") as f:
+        dict_reader = DictReader(f)
+        for entry in dict_reader:
+            mid_path = os.path.normpath(
+                os.path.join(mid_dir, entry["mid_path"])
+            )
+
+            assert os.path.isfile(mid_path), "file missing"
+            if entry["split"] == "train":
+                train_paths.append(mid_path)
+            elif entry["split"] == "test":
+                test_paths.append(mid_path)
+            else:
+                raise ValueError("Invalid split")
+
+    return train_paths, test_paths
+
+
+def build_synth(
+    mid_dir: str,
+    csv_path: str,
+    train_file: str,
+    test_file: str,
+    num_procs: int,
+):
+    from amt.data import AmtDataset, pianoteq_cmd_fn
+
+    if os.path.isfile(train_file):
+        print(f"Dataset file already exists at {train_file} - removing")
+        os.remove(train_file)
+    if os.path.isfile(test_file):
+        print(f"Dataset file already exists at {test_file} - removing")
+        os.remove(test_file)
+
+    (
+        train_paths,
+        test_paths,
+    ) = get_synth_mid_paths(mid_dir, csv_path)
+
+    print(f"Building {train_file}")
+    AmtDataset.build(
+        load_paths=train_paths,
+        save_path=train_file,
+        num_processes=num_procs,
+        cli_cmd_fn=pianoteq_cmd_fn,
+    )
+    print(f"Building {test_file}")
+    AmtDataset.build(
+        load_paths=test_paths,
+        save_path=test_file,
+        num_processes=num_procs,
+        cli_cmd_fn=pianoteq_cmd_fn,
+    )
 
 
 def get_matched_maestro_paths(maestro_dir):
@@ -264,10 +338,14 @@ def main():
     subparser_maestro = subparsers.add_parser(
         "maestro", help="Commands to build the maestro dataset."
     )
+    subparser_synth = subparsers.add_parser(
+        "synth", help="Commands to build the maestro dataset."
+    )
     subparser_transcribe = subparsers.add_parser(
         "transcribe", help="Commands to run transcription."
     )
     _add_maestro_args(subparser_maestro)
+    _add_synth_args(subparser_synth)
     _add_transcribe_args(subparser_transcribe)
 
     args = parser.parse_args()
@@ -281,6 +359,14 @@ def main():
             maestro_dir=args.dir,
             train_file=args.train,
             val_file=args.val,
+            test_file=args.test,
+            num_procs=args.mp,
+        )
+    elif args.command == "synth":
+        build_synth(
+            mid_dir=args.dir,
+            csv_path=args.csv,
+            train_file=args.train,
             test_file=args.test,
             num_procs=args.mp,
         )
