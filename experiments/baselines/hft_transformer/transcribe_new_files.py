@@ -4,7 +4,7 @@ import argparse
 import json
 import sys
 import glob
-from baselines.hft_transformer.src import amt
+from experiments.baselines.hft_transformer.src import amt
 from pydub import AudioSegment
 from pydub.exceptions import CouldntDecodeError
 import random

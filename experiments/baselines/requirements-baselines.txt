@@ -1,0 +1,14 @@
+pretty_midi
+librosa
+piano_transcription_inference
+jax[cuda11_local] -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+nest-asyncio
+gdown
+tensorflow[and-cuda]
+gin-config
+seqio
+t5
+wget
+git+https://github.com/magenta/mt3.git
+
+# -e . -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html

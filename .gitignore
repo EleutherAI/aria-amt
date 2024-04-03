@@ -19,7 +19,8 @@
 
 .idea/
 notebooks/scratch
-baselines/hft_transformer/model_files/
+experiments/baselines/hft_transformer/model_files/
+experiments/baselines/google_t5/model_files/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

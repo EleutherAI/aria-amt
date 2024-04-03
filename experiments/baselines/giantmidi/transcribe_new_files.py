@@ -39,8 +39,10 @@ def transcribe_piano(mp3s_dir, midis_dir, begin_index=None, end_index=None):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Example of parser. ')
-    parser.add_argument('--mp3s_dir', type=str, required=True, help='')
-    parser.add_argument('--midis_dir', type=str, required=True, help='')
+    parser.add_argument('-input_dir_to_transcribe', default=None, help='file list')
+    parser.add_argument('-input_file_to_transcribe', default=None, help='one file')
+    parser.add_argument('-output_dir', help='output directory')
+    parser.add_argument('-output_file', default=None, help='output file')
     parser.add_argument(
         '--begin_index', type=int, required=False,
         help='File num., of an ordered list of files, to start transcribing from.', default=None
@@ -61,7 +63,6 @@ if __name__ == '__main__':
 
 """
 python transcribe_new_files.py \
-     transcribe_piano \
-     --mp3s_dir /mnt/data10/spangher/aira-dl/hFT-Transformer/evaluation/glenn-gould-bach-data \
-     --midis_dir /mnt/data10/spangher/aira-dl/hFT-Transformer/evaluation/glenn-gould-bach-data/kong-model
+     --input_dir_to_transcribe /mnt/data10/spangher/aira-dl/hFT-Transformer/evaluation/glenn-gould-bach-data \
+     --output_dir /mnt/data10/spangher/aira-dl/hFT-Transformer/evaluation/glenn-gould-bach-data/kong-model
 """

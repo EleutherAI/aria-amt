@@ -1,5 +1,5 @@
 """Contains code taken from https://github.com/openai/whisper"""
-
+import functools
 import os
 import random
 import torch
@@ -200,6 +200,7 @@ class AudioTransform(torch.nn.Module):
         detune_ratio: float = 0.1,
         detune_max_shift: float = 0.15,
         spec_aug_ratio: float = 0.5,
+        max_num_transforms: int = None,  # currently we're doing 8 different transformations
     ):
         super().__init__()
         self.tokenizer = AmtTokenizer()
@@ -224,6 +225,14 @@ class AudioTransform(torch.nn.Module):
         self.detune_max_shift = detune_max_shift
         self.spec_aug_ratio = spec_aug_ratio
         self.reduction_resample_rate = 6000  # Hardcoded?
+        # the following two variables, `self.t_count` and `self.max_num_transforms`
+        # are state variables that track the # of transformations applied.
+        # `self.t_count` is set in `forward` method to 0
+        # `t_count` can also be passed into the following methods: `distortion_aug_cpu`, `log_mel`, `aug_wav`,
+        # the methods that we're stochastically applying transformations.
+        # a little messy/stateful, but helps the code be backwards compatible.
+        self.t_count = None
+        self.max_num_transforms = max_num_transforms
 
         # Audio aug
         impulse_paths = self._get_paths(
@@ -269,6 +278,34 @@ class AudioTransform(torch.nn.Module):
                 time_mask_param=1000, iid_masks=True
             ),
         )
+
+        # inverse mel transform
+        self.inverse_mel = torchaudio.transforms.InverseMelScale(
+            n_mels=self.config["n_mels"],
+            sample_rate=self.config["sample_rate"],
+            n_stft=self.config["n_fft"] // 2 + 1,
+        )
+        self.inverse_spec_transform = torchaudio.transforms.GriffinLim(
+            n_fft=self.config["n_fft"],
+            hop_length=self.config["hop_len"],
+        )
+
+    def check_apply_transform(self, ratio: float):
+        """
+        Check if a transformation should be applied based on the ratio and the
+        number of transformations already applied.
+        """
+
+        if (
+                (self.max_num_transforms is not None) and
+                (self.t_count is not None) and
+                (self.t_count >= self.max_num_transforms)
+        ):
+            return False
+        apply_transform = random.random() < ratio
+        if apply_transform:
+            self.t_count += 1
+        return apply_transform
 
     def get_params(self):
         return {
@@ -403,13 +440,16 @@ class AudioTransform(torch.nn.Module):
 
         return AF.overdrive(wav, gain=gain, colour=colour)
 
-    def distortion_aug_cpu(self, wav: torch.Tensor):
+    def distortion_aug_cpu(self, wav: torch.Tensor, t_count: int = None):
         # This function should run on the cpu (i.e. in the dataloader collate
         # function) in order to not be a bottlekneck
+        if t_count is not None:
+            self.t_count = t_count
 
-        if random.random() < self.reduce_ratio:
+        if self.check_apply_transform(self.reduce_ratio):
             wav = self.apply_reduction(wav)
-        if random.random() < self.distort_ratio:
+
+        if self.check_apply_transform(self.distort_ratio):
             wav = self.apply_distortion(wav)
 
         return wav
@@ -440,34 +480,34 @@ class AudioTransform(torch.nn.Module):
         return shifted_specs
 
     def detune_spec(self, specs: torch.Tensor):
-        if random.random() < self.detune_ratio:
-            detune_shift = random.uniform(
-                -self.detune_max_shift, self.detune_max_shift
-            )
-            detuned_specs = self.shift_spec(specs, shift=detune_shift)
+        detune_shift = random.uniform(
+            -self.detune_max_shift, self.detune_max_shift
+        )
+        detuned_specs = self.shift_spec(specs, shift=detune_shift)
 
-            return (specs + detuned_specs) / 2
-        else:
-            return specs
+        specs = (specs + detuned_specs) / 2
+        return specs
 
-    def aug_wav(self, wav: torch.Tensor):
+    def aug_wav(self, wav: torch.Tensor, t_count: int = None):
         # This function doesn't apply distortion. If distortion is desired it
         # should be run beforehand on the cpu with distortion_aug_cpu. Note
         # also that detuning is done to the spectrogram in log_mel, not the wav.
+        if t_count is not None:
+            self.t_count = t_count
 
         # Noise
-        if random.random() < self.noise_ratio:
+        if self.check_apply_transform(self.noise_ratio):
             wav = self.apply_noise(wav)
 
-        if random.random() < self.applause_ratio:
+        if self.check_apply_transform(self.applause_ratio):
             wav = self.apply_applause(wav)
 
         # Reverb
-        if random.random() < self.reverb_ratio:
+        if self.check_apply_transform(self.reverb_ratio):
             wav = self.apply_reverb(wav)
 
         # EQ
-        if random.random() < self.bandpass_ratio:
+        if self.check_apply_transform(self.bandpass_ratio):
             wav = self.apply_bandpass(wav)
 
         return wav
@@ -482,15 +522,25 @@ class AudioTransform(torch.nn.Module):
         return log_spec
 
     def log_mel(
-        self, wav: torch.Tensor, shift: int | None = None, detune: bool = False
+        self,
+        wav: torch.Tensor,
+        shift: int | None = None,
+        detune: bool = False,
+        t_count: int = None,
     ):
+        if t_count is not None:
+            self.t_count = t_count
+
         spec = self.spec_transform(wav)[..., :-1]
 
+        # check: are detune and shift mutually exclusive?
+        # should we also put a ratio on shift?
         if shift is not None and shift != 0:
             spec = self.shift_spec(spec, shift)
         elif detune is True:
-            # Don't detune and spec shift at the same time
-            spec = self.detune_spec(spec)
+            if self.check_apply_transform(self.detune_ratio):
+                # Don't detune and spec shift at the same time
+                spec = self.detune_spec(spec)
 
         mel_spec = self.mel_transform(spec)
 
@@ -499,15 +549,25 @@ class AudioTransform(torch.nn.Module):
 
         return log_spec
 
+    def inverse_log_mel(self, mel: torch.Tensor):
+        """
+        Takes as input a log mel spectrogram and returns the corresponding audio.
+        """
+        mel = (4 * mel) - 4
+        mel = torch.pow(10, mel)
+        mel = self.inverse_mel(mel)
+        return self.inverse_spec_transform(mel)
+
     def forward(self, wav: torch.Tensor, shift: int = 0):
         # Noise, and reverb
+        self.t_count = 0
         wav = self.aug_wav(wav)
 
         # Spec, detuning & pitch shift
         log_mel = self.log_mel(wav, shift, detune=True)
 
         # Spec aug
-        if random.random() < self.spec_aug_ratio:
+        if self.check_apply_transform(self.spec_aug_ratio):
             log_mel = self.spec_aug(log_mel)
 
         return log_mel
