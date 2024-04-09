@@ -27,6 +27,8 @@ from amt.data import AmtDataset
 from amt.config import load_model_config
 from aria.utils import _load_weight
 
+GRADIENT_ACC_STEPS = 4
+
 # ----- USAGE -----
 #
 # This script is meant to be run using the huggingface accelerate cli, see:
@@ -553,7 +555,7 @@ def resume_train(
 
     tokenizer = AmtTokenizer()
     accelerator = accelerate.Accelerator(
-        project_dir=project_dir, gradient_accumulation_steps=4
+        project_dir=project_dir, gradient_accumulation_steps=GRADIENT_ACC_STEPS
     )
     if accelerator.is_main_process:
         project_dir = setup_project_dir(project_dir)
@@ -607,13 +609,13 @@ def resume_train(
         optimizer, scheduler = get_pretrain_optim(
             model,
             num_epochs=epochs,
-            steps_per_epoch=len(train_dataloader),
+            steps_per_epoch=len(train_dataloader) // GRADIENT_ACC_STEPS,
         )
     elif mode == "finetune":
         optimizer, scheduler = get_finetune_optim(
             model,
             num_epochs=epochs,
-            steps_per_epoch=len(train_dataloader),
+            steps_per_epoch=len(train_dataloader) // GRADIENT_ACC_STEPS,
         )
     else:
         raise Exception
@@ -686,7 +688,7 @@ def train(
 
     tokenizer = AmtTokenizer()
     accelerator = accelerate.Accelerator(
-        project_dir=project_dir, gradient_accumulation_steps=4
+        project_dir=project_dir, gradient_accumulation_steps=GRADIENT_ACC_STEPS
     )
     if accelerator.is_main_process:
         project_dir = setup_project_dir(project_dir)
@@ -735,13 +737,13 @@ def train(
         optimizer, scheduler = get_pretrain_optim(
             model,
             num_epochs=epochs,
-            steps_per_epoch=len(train_dataloader),
+            steps_per_epoch=len(train_dataloader) // GRADIENT_ACC_STEPS,
         )
     elif mode == "finetune":
         optimizer, scheduler = get_finetune_optim(
             model,
             num_epochs=epochs,
-            steps_per_epoch=len(train_dataloader),
+            steps_per_epoch=len(train_dataloader) // GRADIENT_ACC_STEPS,
         )
     else:
         raise Exception
