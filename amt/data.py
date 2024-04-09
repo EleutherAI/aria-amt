@@ -18,7 +18,14 @@ from amt.config import load_config
 from amt.audio import pad_or_trim
 
 
-# Occasionally the worker util goes to 0 for some reason, debug this
+def _check_onset_threshold(seq: list, onset: int):
+    for tok_1, tok_2 in zip(seq, seq[1:]):
+        if isinstance(tok_1, tuple) and tok_1[0] in ("on", "off"):
+            _onset = tok_2[1]
+            if _onset > onset:
+                return True
+
+    return False
 
 
 def get_wav_mid_segments(
@@ -80,6 +87,12 @@ def get_wav_mid_segments(
                 end_ms=(idx + num_samples) / samples_per_ms,
                 max_pedal_len_ms=10000,
             )
+
+            # Hardcoded to 2.5s
+            if _check_onset_threshold(mid_feature, 2500) is False:
+                print("No note messages after 2.5s - skipping")
+                continue
+
         else:
             mid_feature = []
 
@@ -136,7 +149,7 @@ def pianoteq_cmd_fn(mid_path: str, wav_path: str):
     safe_wav_path = shlex.quote(wav_path)
 
     # Construct the command
-    command = f"/home/mchorse/amt/pianoteq/x86-64bit/Pianoteq\\ 8\\ STAGE --preset {safe_preset} --midi {safe_mid_path} --wav {safe_wav_path}"
+    command = f"/home/mchorse/pianoteq/x86-64bit/Pianoteq\\ 8\\ STAGE --preset {safe_preset} --midi {safe_mid_path} --wav {safe_wav_path}"
 
     return command
 
@@ -192,23 +205,22 @@ def write_synth_features(cli_cmd_fn: Callable, mid_path: str, save_path: str):
         if os.path.isfile(audio_path_temp):
             os.remove(audio_path_temp)
 
-    with open(save_path, mode="a") as file:
-        try:
-            for wav, seq in features:
-                wav_buffer = io.BytesIO()
-                torch.save(wav, wav_buffer)
-                wav_buffer.seek(0)
-                wav_bytes = wav_buffer.read()
-                wav_str = base64.b64encode(wav_bytes).decode("utf-8")
-                file.write(wav_str)
-                file.write("\n")
+    print(f"Found {len(features)}")
 
-                seq_bytes = orjson.dumps(seq)
-                seq_str = base64.b64encode(seq_bytes).decode("utf-8")
-                file.write(seq_str)
-                file.write("\n")
-        except Exception as e:
-            return
+    with open(save_path, mode="a") as file:
+        for wav, seq in features:
+            wav_buffer = io.BytesIO()
+            torch.save(wav, wav_buffer)
+            wav_buffer.seek(0)
+            wav_bytes = wav_buffer.read()
+            wav_str = base64.b64encode(wav_bytes).decode("utf-8")
+            file.write(wav_str)
+            file.write("\n")
+
+            seq_bytes = orjson.dumps(seq)
+            seq_str = base64.b64encode(seq_bytes).decode("utf-8")
+            file.write(seq_str)
+            file.write("\n")
 
 
 def build_worker_fn(load_path_queue, save_path_queue, _save_path: str):
@@ -234,7 +246,11 @@ def build_synth_worker_fn(
 
     while not load_path_queue.empty():
         mid_path = load_path_queue.get()
-        write_synth_features(cli_cmd, mid_path, worker_save_path)
+        try:
+            write_synth_features(cli_cmd, mid_path, worker_save_path)
+        except Exception as e:
+            print("Failed")
+            print(e)
 
     save_path_queue.put(worker_save_path)
 
@@ -299,7 +315,7 @@ class AmtDataset(torch.utils.data.Dataset):
             seq_len=self.config["max_seq_len"],
         )
 
-        return wav, self.tokenizer.encode(src), self.tokenizer.encode(tgt)
+        return wav, self.tokenizer.encode(src), self.tokenizer.encode(tgt), idx
 
     def _build_index(self):
         self.file_mmap.seek(0)
@@ -314,7 +330,7 @@ class AmtDataset(torch.utils.data.Dataset):
 
         return index
 
-    def _save_index(self, index: list[int], save_path: str):
+    def _save_index(self, index: list, save_path: str):
         with open(save_path, "w") as file:
             for idx in index:
                 file.write(f"{idx}\n")

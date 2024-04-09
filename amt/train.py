@@ -1,11 +1,13 @@
 import os
 import sys
 import csv
+import math
 import random
 import functools
 import argparse
 import logging
 import torch
+import torchaudio
 import accelerate
 
 from torch import nn as nn
@@ -148,7 +150,7 @@ def _get_optim(
 
     warmup_lrs = torch.optim.lr_scheduler.LinearLR(
         optimizer,
-        start_factor=0.000001,
+        start_factor=1e-8,
         end_factor=1,
         total_iters=warmup,
     )
@@ -194,7 +196,7 @@ def get_finetune_optim(
 ):
     LR = 1e-4
     END_RATIO = 0.1
-    WARMUP_STEPS = 500
+    WARMUP_STEPS = 1000
 
     return _get_optim(
         lr=LR,
@@ -229,7 +231,7 @@ def get_dataloaders(
     audio_transform = AudioTransform()
 
     def _collate_fn(seqs, max_pitch_shift: int):
-        wav, src, tgt = torch.utils.data.default_collate(seqs)
+        wav, src, tgt, idxs = torch.utils.data.default_collate(seqs)
 
         # Pitch aug
         pitch_shift = random.randint(-max_pitch_shift, max_pitch_shift)
@@ -239,13 +241,13 @@ def get_dataloaders(
         # Distortion
         wav = audio_transform.distortion_aug_cpu(wav)
 
-        return wav, src, tgt, pitch_shift
+        return wav, src, tgt, pitch_shift, idxs
 
     train_dataloader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         num_workers=num_workers,
-        collate_fn=functools.partial(_collate_fn, max_pitch_shift=5),
+        collate_fn=functools.partial(_collate_fn, max_pitch_shift=4),
         shuffle=True,
     )
     val_dataloader = DataLoader(
@@ -256,14 +258,6 @@ def get_dataloaders(
     )
 
     return train_dataloader, val_dataloader
-
-
-def rolling_average(prev_avg: float, x_n: float, n: int):
-    # Returns rolling average without needing to recalculate
-    if n == 0:
-        return x_n
-    else:
-        return ((prev_avg * (n - 1)) / n) + (x_n / n)
 
 
 def _train(
@@ -292,6 +286,18 @@ def _train(
         )
         _accelerator.save_state(checkpoint_dir)
 
+    def get_max_norm(named_parameters):
+        max_grad_norm = {"val": 0.0}
+        for name, parameter in named_parameters:
+            if parameter.grad is not None and parameter.requires_grad is True:
+                grad_norm = parameter.grad.data.norm(2).item()
+                # logger.debug(f"{name}: {grad_norm}")
+                if grad_norm >= max_grad_norm["val"]:
+                    max_grad_norm["name"] = name
+                    max_grad_norm["val"] = grad_norm
+
+        return max_grad_norm
+
     # This is all slightly messy as train_loop and val_loop make use of the
     # variables in the wider scope. Perhaps refactor this at some point.
     def train_loop(
@@ -319,58 +325,73 @@ def _train(
                 leave=False,
             )
         ):
-            step = __step + _resume_step + 1
+            with accelerator.accumulate(model):
+                step = __step + _resume_step + 1
 
-            wav, src, tgt, pitch_shift = batch
-            with torch.no_grad():
+                wav, src, tgt, pitch_shift, idxs = batch
+
                 mel = audio_transform.forward(wav, shift=pitch_shift)
-            logits = model(mel, src)  # (b_sz, s_len, v_sz)
-            logits = logits.transpose(1, 2)  # Transpose for CrossEntropyLoss
-            loss = loss_fn(logits, tgt)
+                logits = model(mel, src)  # (b_sz, s_len, v_sz)
+                logits = logits.transpose(
+                    1, 2
+                )  # Transpose for CrossEntropyLoss
+                loss = loss_fn(logits, tgt)
 
-            # Calculate statistics
-            loss_buffer.append(loss.item())
-            if len(loss_buffer) > TRAILING_LOSS_STEPS:
-                loss_buffer.pop(0)
-            trailing_loss = sum(loss_buffer) / len(loss_buffer)
-            avg_train_loss = rolling_average(
-                avg_train_loss, loss.item(), __step
-            )
+                # Calculate statistics
+                loss_buffer.append(accelerator.gather(loss).mean(dim=0).item())
+                trailing_loss = sum(loss_buffer[-TRAILING_LOSS_STEPS:]) / len(
+                    loss_buffer[-TRAILING_LOSS_STEPS:]
+                )
+                avg_train_loss = sum(loss_buffer) / len(loss_buffer)
 
-            # Logging
-            logger.debug(
-                f"EPOCH {_epoch} STEP {step}: "
-                f"lr={lr_for_print}, "
-                f"loss={round(loss.item(), 4)}, "
-                f"trailing_loss={round(trailing_loss, 4)}, "
-                f"average_loss={round(avg_train_loss, 4)}"
-            )
-            if accelerator.is_main_process:
-                loss_writer.writerow([_epoch, step, loss.item()])
-            pbar.set_postfix_str(
-                f"lr={lr_for_print}, "
-                f"loss={round(loss.item(), 4)}, "
-                f"trailing={round(trailing_loss, 4)}"
-            )
+                # Logging
+                logger.debug(
+                    f"EPOCH {_epoch} STEP {step}: "
+                    f"lr={lr_for_print}, "
+                    f"loss={round(loss_buffer[-1], 4)}, "
+                    f"trailing_loss={round(trailing_loss, 4)}, "
+                    f"average_loss={round(avg_train_loss, 4)}"
+                )
+                if accelerator.is_main_process:
+                    loss_writer.writerow([_epoch, step, loss_buffer[-1]])
 
-            # Backwards step
-            accelerator.backward(loss)
-            if accelerator.sync_gradients:
+                pbar.set_postfix_str(
+                    f"lr={lr_for_print}, "
+                    f"loss={round(loss_buffer[-1], 4)}, "
+                    f"trailing={round(trailing_loss, 4)}"
+                )
+
+                # Backwards step
+                accelerator.backward(loss)
+
+                max_grad_norm_bn = get_max_norm(model.named_parameters())
                 accelerator.clip_grad_norm_(model.parameters(), 1.0)
+                max_grad_norm_an = get_max_norm(model.named_parameters())
 
-            optimizer.step()
-            optimizer.zero_grad()
-            if scheduler:
-                scheduler.step()
-                lr_for_print = "{:.2e}".format(scheduler.get_last_lr()[0])
-
-            if steps_per_checkpoint:
-                if step % steps_per_checkpoint == 0:
-                    make_checkpoint(
-                        _accelerator=accelerator,
-                        _epoch=_epoch,
-                        _step=step,
+                if max_grad_norm_bn["val"] > 1.5:
+                    logger.warning(
+                        f"Seen large grad_norm {max_grad_norm_bn['name']}: {max_grad_norm_bn['val']} -> {max_grad_norm_an['val']}"
                     )
+                    logger.debug(accelerator.gather(loss))
+                    logger.debug(accelerator.gather(idxs))
+                elif math.isnan(trailing_loss):
+                    logger.error(accelerator.gather(loss))
+                    logger.error(loss_buffer)
+                    logger.error(accelerator.gather(idxs))
+
+                optimizer.step()
+                optimizer.zero_grad()
+                if scheduler:
+                    scheduler.step()
+                    lr_for_print = "{:.2e}".format(scheduler.get_last_lr()[0])
+
+                if steps_per_checkpoint:
+                    if step % steps_per_checkpoint == 0:
+                        make_checkpoint(
+                            _accelerator=accelerator,
+                            _epoch=_epoch,
+                            _step=step,
+                        )
 
         logger.info(
             f"EPOCH {_epoch}/{epochs + start_epoch}: Finished training - "
@@ -379,8 +400,9 @@ def _train(
 
         return avg_train_loss
 
+    @torch.no_grad()
     def val_loop(dataloader, _epoch: int, aug: bool):
-        avg_val_loss = 0
+        loss_buffer = []
         model.eval()
         for step, batch in (
             pbar := tqdm(
@@ -389,26 +411,25 @@ def _train(
                 leave=False,
             )
         ):
-            wav, src, tgt = batch
-            with torch.no_grad():
-                if aug == False:
-                    mel = audio_transform.log_mel(wav)
-                elif aug == True:
-                    # Apply aug without distortion or spec-augment
-                    mel = audio_transform.log_mel(
-                        audio_transform.aug_wav(wav), detune=True
-                    )
-                else:
-                    raise TypeError
+            wav, src, tgt, idxs = batch
 
-                logits = model(mel, src)
-                logits = logits.transpose(
-                    1, 2
-                )  # Transpose for CrossEntropyLoss
-                loss = loss_fn(logits, tgt)
+            if aug == False:
+                mel = audio_transform.log_mel(wav)
+            elif aug == True:
+                # Apply aug without distortion or spec-augment
+                mel = audio_transform.log_mel(
+                    audio_transform.aug_wav(wav), detune=True
+                )
+            else:
+                raise TypeError
+
+            logits = model(mel, src)
+            logits = logits.transpose(1, 2)  # Transpose for CrossEntropyLoss
+            loss = loss_fn(logits, tgt)
 
             # Logging
-            avg_val_loss = rolling_average(avg_val_loss, loss.item(), step)
+            loss_buffer.append(accelerator.gather(loss).mean(dim=0).item())
+            avg_val_loss = sum(loss_buffer) / len(loss_buffer)
             pbar.set_postfix_str(f"average_loss={round(avg_val_loss, 4)}")
 
         # EPOCH
@@ -425,7 +446,7 @@ def _train(
             steps_per_checkpoint > 1
         ), "Invalid checkpoint mode value (too small)"
 
-    TRAILING_LOSS_STEPS = 200
+    TRAILING_LOSS_STEPS = 100
     PAD_ID = train_dataloader.dataset.tokenizer.pad_id
     logger = get_logger(__name__)  # Accelerate logger
     loss_fn = nn.CrossEntropyLoss(ignore_index=PAD_ID)
@@ -531,7 +552,9 @@ def resume_train(
     assert os.path.isfile(val_data_path), f"No file found at {val_data_path}"
 
     tokenizer = AmtTokenizer()
-    accelerator = accelerate.Accelerator(project_dir=project_dir)
+    accelerator = accelerate.Accelerator(
+        project_dir=project_dir, gradient_accumulation_steps=4
+    )
     if accelerator.is_main_process:
         project_dir = setup_project_dir(project_dir)
         logger = setup_logger(project_dir)
@@ -662,7 +685,9 @@ def train(
         assert os.path.isfile(finetune_cp_path), "Invalid checkpoint path"
 
     tokenizer = AmtTokenizer()
-    accelerator = accelerate.Accelerator(project_dir=project_dir)
+    accelerator = accelerate.Accelerator(
+        project_dir=project_dir, gradient_accumulation_steps=4
+    )
     if accelerator.is_main_process:
         project_dir = setup_project_dir(project_dir)
         logger = setup_logger(project_dir)
@@ -801,6 +826,9 @@ def parse_train_args():
     argp.add_argument("model", help="name of model config file")
     argp.add_argument("train_data", help="path to train dir")
     argp.add_argument("val_data", help="path to val dir")
+    argp.add_argument(
+        "-cpath", help="resuming checkpoint", type=str, required=False
+    )
     argp.add_argument("-epochs", help="train epochs", type=int, required=True)
     argp.add_argument("-bs", help="batch size", type=int, default=32)
     argp.add_argument("-workers", help="number workers", type=int, default=1)
@@ -849,6 +877,7 @@ if __name__ == "__main__":
             num_workers=train_args.workers,
             batch_size=train_args.bs,
             epochs=train_args.epochs,
+            finetune_cp_path=train_args.cpath,
             steps_per_checkpoint=train_args.spc,
             project_dir=train_args.pdir,
         )

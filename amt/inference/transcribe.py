@@ -185,14 +185,14 @@ def process_segments(
         [MAX_BLOCK_LEN for _ in prefixes], dtype=torch.int
     ).cuda()
 
-    for idx in (
-        pbar := tqdm(
-            range(min_prefix_len, MAX_BLOCK_LEN - 1),
-            total=MAX_BLOCK_LEN - (min_prefix_len + 1),
-            leave=False,
-        )
-    ):
-        # for idx in range(min_prefix_len, MAX_BLOCK_LEN - 1):
+    # for idx in (
+    #     pbar := tqdm(
+    #         range(min_prefix_len, MAX_BLOCK_LEN - 1),
+    #         total=MAX_BLOCK_LEN - (min_prefix_len + 1),
+    #         leave=False,
+    #     )
+    # ):
+    for idx in range(min_prefix_len, MAX_BLOCK_LEN - 1):
         with torch.backends.cuda.sdp_kernel(
             enable_flash=False, enable_mem_efficient=False, enable_math=True
         ):
@@ -274,7 +274,7 @@ def gpu_manager(
         decode_token = torch.compile(
             decode_token,
             # mode="reduce-overhead",
-            mode="max-autotune",
+            # mode="max-autotune",
             fullgraph=True,
         )
 
@@ -743,7 +743,7 @@ def batch_transcribe(
         for p in gpu_manager_processes:
             p.start()
         watchdog_process = multiprocessing.Process(
-            target=watchdog, args=(gpu_batch_manager_process[0].pid, child_pids)
+            target=watchdog, args=(gpu_batch_manager_process.pid, child_pids)
         )
         watchdog_process.start()
     else:

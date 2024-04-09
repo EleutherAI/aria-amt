@@ -189,16 +189,16 @@ def build_maestro(maestro_dir, train_file, val_file, test_file, num_procs):
 
     print(f"Building {train_file}")
     AmtDataset.build(
-        load_paths=matched_paths_train,
+        load_paths=matched_paths_train + matched_paths_val,
         save_path=train_file,
         num_processes=num_procs,
     )
-    print(f"Building {val_file}")
-    AmtDataset.build(
-        load_paths=matched_paths_val,
-        save_path=val_file,
-        num_processes=num_procs,
-    )
+    # print(f"Building {val_file}")
+    # AmtDataset.build(
+    #     load_paths=matched_paths_val,
+    #     save_path=val_file,
+    #     num_processes=num_procs,
+    # )
     print(f"Building {test_file}")
     AmtDataset.build(
         load_paths=matched_paths_test,

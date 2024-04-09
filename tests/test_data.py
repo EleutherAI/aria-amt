@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.INFO)
 if os.path.isdir("tests/test_results") is False:
     os.mkdir("tests/test_results")
 
-MAESTRO_PATH = "/weka/proj-aria/aria-amt/data/train.jsonl"
+MAESTRO_PATH = "/home/mchorse/amt/data/maestro_train/train.txt"
 
 
 def plot_spec(mel: torch.Tensor, name: str | int):
@@ -57,7 +57,7 @@ class TestAmtDataset(unittest.TestCase):
 
         dataset = AmtDataset("tests/test_results/dataset.jsonl")
         tokenizer = AmtTokenizer()
-        for idx, (wav, src, tgt) in enumerate(dataset):
+        for idx, (wav, src, tgt, idx) in enumerate(dataset):
             print(wav.shape, src.shape, tgt.shape)
             src_decoded = tokenizer.decode(src)
             tgt_decoded = tokenizer.decode(tgt)
@@ -76,11 +76,11 @@ class TestAmtDataset(unittest.TestCase):
         audio_transform = AudioTransform()
         dataset = AmtDataset(load_path=MAESTRO_PATH)
         print(f"Dataset length: {len(dataset)}")
-        for idx, (wav, src, tgt) in enumerate(dataset):
+        for idx, (wav, src, tgt, idx) in enumerate(dataset):
             src_dec, tgt_dec = tokenizer.decode(src), tokenizer.decode(tgt)
-            if (idx + 1) % 100 == 0:
-                break
-            if idx % 7 == 0:
+
+            if idx % 7 == 0 and idx < 100:
+                print(idx)
                 src_mid_dict = tokenizer._detokenize_midi_dict(
                     src_dec,
                     len_ms=30000,
@@ -90,6 +90,11 @@ class TestAmtDataset(unittest.TestCase):
                 src_mid.save(f"tests/test_results/dataset_{idx}.mid")
                 torchaudio.save(
                     f"tests/test_results/wav_{idx}.wav", wav.unsqueeze(0), 16000
+                )
+                torchaudio.save(
+                    f"tests/test_results/wav_aug_{idx}.wav",
+                    audio_transform.aug_wav(wav.unsqueeze(0)),
+                    16000,
                 )
                 plot_spec(
                     audio_transform(wav.unsqueeze(0)).squeeze(0), f"mel_{idx}"
