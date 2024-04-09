@@ -191,15 +191,15 @@ class AudioTransform(torch.nn.Module):
         max_snr: int = 50,
         max_dist_gain: int = 25,
         min_dist_gain: int = 0,
-        noise_ratio: float = 0.75,
-        reverb_ratio: float = 0.75,
+        noise_ratio: float = 0.5,
+        reverb_ratio: float = 0.5,
         applause_ratio: float = 0.01,
-        bandpass_ratio: float = 0.15,
-        distort_ratio: float = 0.15,
-        reduce_ratio: float = 0.01,
+        bandpass_ratio: float = 0.05,
+        distort_ratio: float = 0.05,
+        reduce_ratio: float = 0.0,
         detune_ratio: float = 0.0,
         detune_max_shift: float = 0.0,
-        spec_aug_ratio: float = 0.9,
+        spec_aug_ratio: float = 0.0,
     ):
         super().__init__()
         self.tokenizer = AmtTokenizer()
@@ -224,8 +224,8 @@ class AudioTransform(torch.nn.Module):
         self.detune_max_shift = detune_max_shift
         self.spec_aug_ratio = spec_aug_ratio
 
-        self.time_mask_param = 2500
-        self.freq_mask_param = 15
+        self.time_mask_param = 500
+        self.freq_mask_param = 10
         self.reduction_resample_rate = 6000
 
         # Audio aug

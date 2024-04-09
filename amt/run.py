@@ -189,16 +189,16 @@ def build_maestro(maestro_dir, train_file, val_file, test_file, num_procs):
 
     print(f"Building {train_file}")
     AmtDataset.build(
-        load_paths=matched_paths_train + matched_paths_val,
+        load_paths=matched_paths_train,
         save_path=train_file,
         num_processes=num_procs,
     )
-    # print(f"Building {val_file}")
-    # AmtDataset.build(
-    #     load_paths=matched_paths_val,
-    #     save_path=val_file,
-    #     num_processes=num_procs,
-    # )
+    print(f"Building {val_file}")
+    AmtDataset.build(
+        load_paths=matched_paths_val,
+        save_path=val_file,
+        num_processes=num_procs,
+    )
     print(f"Building {test_file}")
     AmtDataset.build(
         load_paths=matched_paths_test,
@@ -296,8 +296,8 @@ def transcribe(
         )
         val_mp3_paths = [ap for ap, mp in matched_val_paths]
         test_mp3_paths = [ap for ap, mp in matched_test_paths]
-        file_paths = val_mp3_paths + test_mp3_paths
-        assert len(file_paths) == 314, "Invalid maestro files"
+        file_paths = test_mp3_paths  # val_mp3_paths + test_mp3_paths
+        assert len(file_paths) == 177, "Invalid maestro files"
     else:
         file_paths = [load_path]
         batch_size = 1

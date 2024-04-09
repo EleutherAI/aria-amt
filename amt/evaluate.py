@@ -42,27 +42,32 @@ def midi_to_hz(note, shift=0):
     # return (a / 32) * (2 ** ((note - 9) / 12))
 
 
+def get_matched_files(est_dir: str, ref_dir: str):
+    # We assume that the files have the same path relative to their directory
+
+    res = []
+    est_paths = glob.glob(os.path.join(est_dir, "**/*.mid"), recursive=True)
+    print(f"found {len(est_paths)} est files")
+
+    for est_path in est_paths:
+        est_rel_path = os.path.relpath(est_path, est_dir)
+        ref_path = os.path.join(
+            ref_dir, os.path.splitext(est_rel_path)[0] + ".midi"
+        )
+        if os.path.isfile(ref_path):
+            res.append((est_path, ref_path))
+
+    print(f"found {len(res)} matched est-ref pairs")
+
+    return res
+
+
 def evaluate_mir_eval(est_dir, ref_dir, output_stats_file=None, est_shift=0):
     """
     Evaluate the estimated pitches against the reference pitches using mir_eval.
     """
-    # Evaluate the estimated pitches against the reference pitches
-    ref_midi_files = glob.glob(f"{ref_dir}/*.mid*")
-    est_midi_files = glob.glob(f"{est_dir}/*.mid*")
 
-    est_ref_pairs = []
-    for est_fpath in est_midi_files:
-        ref_fpath = os.path.join(ref_dir, os.path.basename(est_fpath))
-        if ref_fpath in ref_midi_files:
-            est_ref_pairs.append((est_fpath, ref_fpath))
-        if ref_fpath.replace(".mid", ".midi") in ref_midi_files:
-            est_ref_pairs.append(
-                (est_fpath, ref_fpath.replace(".mid", ".midi"))
-            )
-        else:
-            print(
-                f"Reference file not found for {est_fpath} (ref file: {ref_fpath})"
-            )
+    est_ref_pairs = get_matched_files(est_dir, ref_dir)
 
     output_fhandle = (
         open(output_stats_file, "w") if output_stats_file is not None else None
@@ -104,38 +109,9 @@ if __name__ == "__main__":
         help="Path to the file to save the evaluation stats",
     )
 
-    # add mir_eval and dtw subparsers
-    subparsers = parser.add_subparsers(help="sub-command help")
-    mir_eval_parse = subparsers.add_parser(
-        "run_mir_eval",
-        help="Run standard mir_eval evaluation on MAESTRO test set.",
-    )
-    mir_eval_parse.add_argument(
-        "--shift",
-        type=int,
-        default=0,
-        help="Shift to apply to the estimated pitches.",
-    )
-
-    # to come
-    dtw_eval_parse = subparsers.add_parser(
-        "run_dtw",
-        help="Run dynamic time warping evaluation on a specified dataset.",
-    )
-
     args = parser.parse_args()
-    if not hasattr(args, "command"):
-        parser.print_help()
-        print("Unrecognized command")
-        exit(1)
-
-    # todo: should we add an option to run transcription again every time we wish to evaluate?
-    #  that way, we can run both tests with a range of different audio augmentations right here.
-    #  -> We expect that baseline methods will fall flat on these, while aria-amt will be OK.
-
-    if args.command == "run_mir_eval":
-        evaluate_mir_eval(
-            args.est_dir, args.ref_dir, args.output_stats_file, args.shift
-        )
-    elif args.command == "run_dtw":
-        pass
+    evaluate_mir_eval(
+        args.est_dir,
+        args.ref_dir,
+        args.output_stats_file,
+    )

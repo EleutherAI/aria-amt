@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.INFO)
 if os.path.isdir("tests/test_results") is False:
     os.mkdir("tests/test_results")
 
-MAESTRO_PATH = "/home/mchorse/amt/data/maestro_train/train.txt"
+MAESTRO_PATH = "/mnt/ssd1/amt/training_data/train.txt"
 
 
 def plot_spec(mel: torch.Tensor, name: str | int):
@@ -76,7 +76,7 @@ class TestAmtDataset(unittest.TestCase):
         audio_transform = AudioTransform()
         dataset = AmtDataset(load_path=MAESTRO_PATH)
         print(f"Dataset length: {len(dataset)}")
-        for idx, (wav, src, tgt, idx) in enumerate(dataset):
+        for idx, (wav, src, tgt, __idx) in enumerate(dataset):
             src_dec, tgt_dec = tokenizer.decode(src), tokenizer.decode(tgt)
 
             if idx % 7 == 0 and idx < 100:

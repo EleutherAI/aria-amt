@@ -256,7 +256,11 @@ def gpu_manager(
     compile: bool = False,
     gpu_id: int | None = None,
 ):
-    logger = _setup_logger(name="GPU")
+    if gpu_id:
+        logger = _setup_logger(name=f"GPU-{gpu_id}")
+    else:
+        logger = _setup_logger(name=f"GPU")
+
     logger.info("Started GPU manager")
 
     if gpu_id is not None:
@@ -681,6 +685,8 @@ def batch_transcribe(
             os.path.isfile(get_save_path(file_path, input_dir, save_dir))
             is False
         ):
+            file_queue.put(file_path)
+        elif len(file_paths) == 1:
             file_queue.put(file_path)
 
     logger.info(f"Files to process: {file_queue.qsize()}/{len(file_paths)}")
