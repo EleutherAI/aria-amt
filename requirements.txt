@@ -6,3 +6,5 @@ mido
 tqdm
 orjson
 mir_eval
+pyfluidsynth @ git+https://github.com/nwhitehead/pyfluidsynth.git
+midi2audio
