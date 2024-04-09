@@ -1,14 +1,17 @@
+# you need python 3.11 for this to work (tensorflow-text dependency)
 pretty_midi
-librosa
+librosa==0.9.2
 piano_transcription_inference
-jax[cuda11_local] -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+# jax[cuda12_local] -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+# jax[cuda11_local] -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+jax[cuda12_pip] -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 nest-asyncio
 gdown
 tensorflow[and-cuda]
 gin-config
-seqio
 t5
 wget
+note-seq
 git+https://github.com/magenta/mt3.git
 
 # -e . -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html

@@ -4,62 +4,44 @@ import time
 import torch
 import piano_transcription_inference
 import glob
-
-
-def transcribe_piano(mp3s_dir, midis_dir, begin_index=None, end_index=None):
-    """Transcribe piano solo mp3s to midi files."""
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    os.makedirs(midis_dir, exist_ok=True)
-
-    # Transcriptor
-    transcriptor = piano_transcription_inference.PianoTranscription(device=device)
-
-    transcribe_time = time.time()
-    for n, mp3_path in enumerate(glob.glob(os.path.join(mp3s_dir, '*.mp3'))[begin_index:end_index]):
-        print(n, mp3_path)
-        midi_file = os.path.basename(mp3_path).replace('.mp3', '.midi')
-        midi_path = os.path.join(midis_dir, midi_file)
-        if os.path.exists(midi_path):
-            continue
-
-        (audio, _) = (
-            piano_transcription_inference
-                .load_audio(mp3_path, sr=piano_transcription_inference.sample_rate, mono=True)
-        )
-
-        try:
-            # Transcribe
-            transcribed_dict = transcriptor.transcribe(audio, midi_path)
-            print(transcribed_dict)
-        except:
-            print('Failed for this audio!')
-
-    print('Time: {:.3f} s'.format(time.time() - transcribe_time))
+from more_itertools import unique_everseen
+from  tqdm.auto import tqdm
+from random import shuffle
+import sys
+here = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(os.path.join(here, '../..'))
+import loader_util
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Example of parser. ')
-    parser.add_argument('-input_dir_to_transcribe', default=None, help='file list')
-    parser.add_argument('-input_file_to_transcribe', default=None, help='one file')
-    parser.add_argument('-output_dir', help='output directory')
-    parser.add_argument('-output_file', default=None, help='output file')
-    parser.add_argument(
-        '--begin_index', type=int, required=False,
-        help='File num., of an ordered list of files, to start transcribing from.', default=None
-    )
-    parser.add_argument(
-        '--end_index', type=int, required=False, default=None,
-        help='File num., of an ordered list of files, to end transcription.'
-    )
-
-    # Parse arguments
+    parser = loader_util.add_io_arguments(parser)
     args = parser.parse_args()
-    transcribe_piano(
-        mp3s_dir=args.mp3s_dir,
-        midis_dir=args.midis_dir,
-        begin_index=args.begin_index,
-        end_index=args.end_index
-    )
+
+    files_to_transcribe = loader_util.get_files_to_transcribe(args)
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    transcriptor = piano_transcription_inference.PianoTranscription(device=device)
+
+    # Transcriptor
+    for n, (input_fname, output_fname) in tqdm(enumerate(files_to_transcribe), total=len(files_to_transcribe)):
+        if os.path.exists(output_fname):
+            continue
+
+        now_start = time.time()
+        (audio, _) = (piano_transcription_inference
+                            .load_audio(input_fname, sr=piano_transcription_inference.sample_rate, mono=True))
+        print(f'READING ELAPSED TIME: {time.time() - now_start}')
+        now_read = time.time()
+        try:
+            # Transcribe
+            transcribed_dict = transcriptor.transcribe(audio, output_fname)
+        except:
+            print('Failed for this audio!')
+        print(f'TRANSCRIPTION ELAPSED TIME: {time.time() - now_read}')
+        print(f'TOTAL ELAPSED TIME: {time.time() - now_start}')
+
+
 
 """
 python transcribe_new_files.py \

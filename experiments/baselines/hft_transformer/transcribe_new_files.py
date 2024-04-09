@@ -4,13 +4,17 @@ import argparse
 import json
 import sys
 import glob
-from experiments.baselines.hft_transformer.src import amt
-from pydub import AudioSegment
-from pydub.exceptions import CouldntDecodeError
 import random
 import torch
 here = os.path.dirname(os.path.abspath(__file__))
-
+import sys
+sys.path.append(os.path.join(here, 'model'))
+import hft_amt as amt
+import time
+from random import shuffle
+sys.path.append(os.path.join(here, '../..'))
+import loader_util
+from tqdm.auto import tqdm
 
 _AMT = None
 def get_AMT(config_file=None, model_file=None):
@@ -33,17 +37,6 @@ def get_AMT(config_file=None, model_file=None):
             _AMT.model = model
     return _AMT
 
-def check_and_convert_mp3_to_wav(fname):
-    wav_file = fname.replace('.mp3', '.wav')
-    if not os.path.exists(wav_file):
-        print('converting ' + fname + ' to .wav...')
-        try:
-            sound = AudioSegment.from_mp3(fname)
-            sound.export(fname.replace('.mp3', '.wav'), format="wav")
-        except CouldntDecodeError:
-            print('failed to convert ' + fname)
-            return None
-    return wav_file
 
 
 def transcribe_file(
@@ -59,9 +52,10 @@ def transcribe_file(
 ):
     if AMT is None:
         AMT = get_AMT()
-
+    now_start = time.time()
     a_feature = AMT.wav2feature(fname)
-
+    print(f'READING ELAPSED TIME: {time.time() - now_start}')
+    now_read = time.time()
     # transcript
     if n_stride > 0:
         output = AMT.transcript_stride(a_feature, n_stride, mode=mode, ablation_flag=ablation)
@@ -69,7 +63,8 @@ def transcribe_file(
         output = AMT.transcript(a_feature, mode=mode, ablation_flag=ablation)
     (output_1st_onset, output_1st_offset, output_1st_mpe, output_1st_velocity,
      output_2nd_onset, output_2nd_offset, output_2nd_mpe, output_2nd_velocity) = output
-
+    print(f'TRANSCRIPTION ELAPSED TIME: {time.time() - now_read}')
+    print(f'TOTAL ELAPSED TIME: {time.time() - now_start}')
     # note (mpe2note)
     a_note_1st_predict = AMT.mpe2note(
         a_onset=output_1st_onset,
@@ -101,15 +96,9 @@ def transcribe_file(
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # necessary arguments
-    parser.add_argument('-input_dir_to_transcribe', default=None, help='file list')
-    parser.add_argument('-input_file_to_transcribe', default=None, help='one file')
-    parser.add_argument('-output_dir', help='output directory')
-    parser.add_argument('-output_file', default=None, help='output file')
+    parser = loader_util.add_io_arguments(parser)
     parser.add_argument('-f_config', help='config json file', default=None)
     parser.add_argument('-model_file', help='input model file', default=None)
-    parser.add_argument('-start_index', help='start index', type=int, default=None)
-    parser.add_argument('-end_index', help='end index', type=int, default=None)
-    parser.add_argument('-skip_transcribe_mp3', action='store_true', default=False)
     # parameters
     parser.add_argument('-mode', help='mode to transcript (combination|single)', default='combination')
     parser.add_argument('-thred_mpe', help='threshold value for mpe detection', type=float, default=0.5)
@@ -121,56 +110,23 @@ if __name__ == '__main__':
 
     assert (args.input_dir_to_transcribe is not None) or (args.input_file_to_transcribe is not None), "input file or directory is not specified"
 
-    if args.input_dir_to_transcribe is not None:
-        if not args.skip_transcribe_mp3:
-            # list file
-            a_mp3s = (
-                    glob.glob(os.path.join(args.input_dir_to_transcribe, '*.mp3')) +
-                    glob.glob(os.path.join(args.input_dir_to_transcribe, '*', '*.mp3'))
-            )
-            print(f'transcribing {len(a_mp3s)} files: [{str(a_mp3s)}]...')
-            list(map(check_and_convert_mp3_to_wav, a_mp3s))
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
 
-        a_list = (
-            glob.glob(os.path.join(args.input_dir_to_transcribe, '*.wav')) +
-            glob.glob(os.path.join(args.input_dir_to_transcribe, '*', '*.wav'))
-        )
-        if (args.start_index is not None) or (args.end_index is not None):
-            if args.start_index is None:
-                args.start_index = 0
-            if args.end_index is None:
-                args.end_index = len(a_list)
-            a_list = a_list[args.start_index:args.end_index]
-        # shuffle a_list
-        random.shuffle(a_list)
-
-    elif args.input_file_to_transcribe is not None:
-        args.input_file_to_transcribe = check_and_convert_mp3_to_wav(args.input_file_to_transcribe)
-        if args.input_file_to_transcribe is None:
-            sys.exit()
-        a_list = [args.input_file_to_transcribe]
-        print(f'transcribing {str(a_list)} files...')
+    a_list = loader_util.get_files_to_transcribe(args)
 
     # load model
     AMT = get_AMT(args.f_config, args.model_file)
 
     long_filename_counter = 0
-    for fname in a_list:
-        if args.output_file is not None:
-            output_fname = args.output_file
-        else:
-            output_fname = fname.replace('.wav', '')
-            if len(output_fname) > 200:
-                output_fname = output_fname[:200] + f'_fnabbrev-{long_filename_counter}'
-            output_fname += '_transcribed.mid'
-            output_fname = os.path.join(args.output_dir, os.path.basename(output_fname))
-            if os.path.exists(output_fname):
-                continue
+    for input_fname, output_fname in tqdm(a_list):
+        if os.path.exists(output_fname):
+            continue
 
-        print('[' + fname + ']')
+        print(f'transcribing {input_fname} -> {output_fname}')
         try:
             transcribe_file(
-                fname,
+                input_fname,
                 output_fname,
                 args.mode,
                 args.thred_mpe,
@@ -180,6 +136,8 @@ if __name__ == '__main__':
                 args.ablation,
                 AMT,
             )
+            now = time.time()
+            print(f'ELAPSED TIME: {time.time() - now}')
         except Exception as e:
             print(e)
             continue
@@ -193,4 +151,12 @@ e.g. usage:
 python evaluation/transcribe_new_files.py \
     -input_dir_to_transcribe evaluation/glenn-gould-bach-data \
     -output_dir hft-evaluation-data/ \
+
+python baselines/hft_transformer/transcribe_new_files.py \
+    -input_dir_to_transcribe ../../music-corpora/ \
+    -input_files_map other-dataset-splits.csv \
+    -split_col_name split \
+    -split test \
+    -output_dir hft-dtw-evaluation-data/ \
+    -file_col_name audio_path 
 """

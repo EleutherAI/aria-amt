@@ -21,6 +21,7 @@
 notebooks/scratch
 experiments/baselines/hft_transformer/model_files/
 experiments/baselines/google_t5/model_files/
+experiments/aria-amt-intermediate-transcribed-data
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -13,6 +13,13 @@ import seqio
 import t5
 import t5x
 import librosa
+import time
+import sys
+import os
+from tqdm.auto import tqdm
+here = os.path.dirname(__file__)
+sys.path.append(os.path.join(here, '../..'))
+import loader_util
 
 from mt3 import metrics_utils
 from mt3 import models
@@ -24,6 +31,8 @@ from mt3 import vocabularies
 from scipy.io import wavfile
 import os
 import glob
+from more_itertools import unique_everseen
+from random import shuffle
 here = os.path.dirname(__file__)
 
 def download_model():
@@ -251,56 +260,42 @@ class InferenceModel(object):
 
 def load_audio(data, sample_rate=None):
     # read in wave data and convert to samples
+    # todo: check if this still works with mp3s
     f, sr = librosa.load(data, sr=sample_rate)
     return f
     # return note_seq.audio_io.wav_data_to_samples_librosa(data, sample_rate=sample_rate)
 
 
-
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
+    parser = loader_util.add_io_arguments(parser)
     # necessary arguments
-    parser.add_argument('-input_dir_to_transcribe', default=None, help='file list')
-    parser.add_argument('-input_file_to_transcribe', default=None, help='one file')
-    parser.add_argument('-output_dir', help='output directory')
-    parser.add_argument('-output_file', default=None, help='output file')
     parser.add_argument('-f_config', help='config json file', default=None)
     parser.add_argument('-model_file', help='input model file', default="ismir2021")
-    parser.add_argument('-start_index', help='start index', type=int, default=None)
-    parser.add_argument('-end_index', help='end index', type=int, default=None)
     parser.add_argument('-sample_rate', help='sample rate', type=int, default=16000)
 
     args = parser.parse_args()
+    # get model
     MODEL = args.model_file
     checkpoint_path = os.path.join(here, 'model_files', 'checkpoints', MODEL)
     if not os.path.exists(checkpoint_path):
         download_model()
     inference_model = InferenceModel(checkpoint_path, MODEL)
-    if args.input_file_to_transcribe is not None:
-        files_to_transcribe = [args.input_file_to_transcribe]
-    else:
-        files_to_transcribe = glob.glob(os.path.join(args.input_dir_to_transcribe, '*.mp3'))
-        files_to_transcribe = files_to_transcribe[args.begin_index:args.end_index]
-    if args.output_file is not None:
-        args.output_file = os.path.join(here, args.output_file)
-        midi_output_names = [args.output_file]
-        args.output_dir = os.path.dirname(args.output_file)
-    else:
-        midi_output_names = list(map(os.path.basename, files_to_transcribe))
-        midi_output_names = list(map(lambda x: x.replace('.mp3', '.midi'), midi_output_names))
-        midi_output_names = list(map(lambda x: os.path.join(args.output_dir, x), midi_output_names))
 
-    if not os.path.exists(args.output_dir):
-        os.makedirs(args.output_dir)
-
-    for n, (mp3_path, midi_path) in enumerate(zip(files_to_transcribe, midi_output_names)):
-        print(n, mp3_path)
-        if os.path.exists(midi_path):
+    files_to_transcribe = loader_util.get_files_to_transcribe(args)
+    for n, (input_fname, output_fname) in tqdm(enumerate(files_to_transcribe), total=len(files_to_transcribe)):
+        print(f'Transcribing {input_fname} -> {output_fname}...')
+        if os.path.exists(output_fname):
             continue
-        audio = load_audio(mp3_path, sample_rate=args.sample_rate)
+        now_start = time.time()
+        audio = load_audio(input_fname, sample_rate=args.sample_rate)
+        print(f'READING ELAPSED TIME: {time.time() - now_start}')
+        now_read = time.time()
         est_ns = inference_model(audio)
-        note_seq.sequence_proto_to_midi_file(est_ns, midi_path)
+        print(f'TRANSCRIPTION ELAPSED TIME: {time.time() - now_read}')
+        print(f'TOTAL ELAPSED TIME: {time.time() - now_start}')
+        note_seq.sequence_proto_to_midi_file(est_ns, output_fname)
 
 
 """
