@@ -329,15 +329,16 @@ class AmtTokenizer(Tokenizer):
                 )
             elif tok_1_type == "on":
                 if (tok_2_type, tok_3_type) != ("onset", "vel"):
-                    print("Unexpected token order:", tok_1, tok_2, tok_3)
-                    raise ValueError
+                    raise ValueError(
+                        "Unexpected token order:", tok_1, tok_2, tok_3
+                    )
                 else:
                     notes_to_close[tok_1_data] = (tok_2_data, tok_3_data)
             elif tok_1_type == "off":
                 if tok_2_type != "onset":
-                    print("Unexpected token order:", tok_1, tok_2, tok_3)
-                    if DEBUG:
-                        raise Exception
+                    raise ValueError(
+                        "Unexpected token order:", tok_1, tok_2, tok_3
+                    )
                 else:
                     # Process note and add to note msgs
                     note_to_close = notes_to_close.pop(tok_1_data, None)
