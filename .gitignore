@@ -1,6 +1,5 @@
 # data files
 *.csv
-*.json
 *.xls
 *.xlsx
 *.pkl

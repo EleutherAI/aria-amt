@@ -1,6 +1,8 @@
 import mmap
 import os
 import io
+import random
+import shlex
 import base64
 import shutil
 import orjson
@@ -16,7 +18,14 @@ from amt.config import load_config
 from amt.audio import pad_or_trim
 
 
-# Occasionally the worker util goes to 0 for some reason, debug this
+def _check_onset_threshold(seq: list, onset: int):
+    for tok_1, tok_2 in zip(seq, seq[1:]):
+        if isinstance(tok_1, tuple) and tok_1[0] in ("on", "off"):
+            _onset = tok_2[1]
+            if _onset > onset:
+                return True
+
+    return False
 
 
 def get_wav_mid_segments(
@@ -24,6 +33,7 @@ def get_wav_mid_segments(
     mid_path: str = "",
     return_json: bool = False,
     stride_factor: int | None = None,
+    pad_last=False,
 ):
     """This function yields tuples of matched log mel spectrograms and
     tokenized sequences (np.array, list). If it is given only an audio path
@@ -61,10 +71,12 @@ def get_wav_mid_segments(
 
     # Create features
     total_samples = wav.shape[-1]
+    pad_factor = 2 if pad_last is True else 1
     res = []
     for idx in range(
         0,
-        total_samples - (num_samples - num_samples // stride_factor),
+        total_samples
+        - (num_samples - pad_factor * (num_samples // stride_factor)),
         num_samples // stride_factor,
     ):
         audio_feature = pad_or_trim(wav[idx:], length=num_samples)
@@ -75,6 +87,12 @@ def get_wav_mid_segments(
                 end_ms=(idx + num_samples) / samples_per_ms,
                 max_pedal_len_ms=10000,
             )
+
+            # Hardcoded to 2.5s
+            if _check_onset_threshold(mid_feature, 2500) is False:
+                print("No note messages after 2.5s - skipping")
+                continue
+
         else:
             mid_feature = []
 
@@ -84,6 +102,56 @@ def get_wav_mid_segments(
         res.append((audio_feature, mid_feature))
 
     return res
+
+
+def pianoteq_cmd_fn(mid_path: str, wav_path: str):
+    presets = [
+        "C. Bechstein",
+        "C. Bechstein Close Mic",
+        "C. Bechstein Under Lid",
+        "C. Bechstein 440",
+        "C. Bechstein Recording",
+        "C. Bechstein Werckmeister III",
+        "C. Bechstein Neidhardt III",
+        "C. Bechstein mesotonic",
+        "C. Bechstein well tempered",
+        "HB Steinway D Blues",
+        "HB Steinway D Pop",
+        "HB Steinway D New Age",
+        "HB Steinway D Prelude",
+        "HB Steinway D Felt I",
+        "HB Steinway D Felt II",
+        "HB Steinway Model D",
+        "HB Steinway D Classical Recording",
+        "HB Steinway D Jazz Recording",
+        "HB Steinway D Chamber Recording",
+        "HB Steinway D Studio Recording",
+        "HB Steinway D Intimate",
+        "HB Steinway D Cinematic",
+        "HB Steinway D Close Mic Classical",
+        "HB Steinway D Close Mic Jazz",
+        "HB Steinway D Player Wide",
+        "HB Steinway D Player Clean",
+        "HB Steinway D Trio",
+        "HB Steinway D Duo",
+        "HB Steinway D Cabaret",
+        "HB Steinway D Bright",
+        "HB Steinway D Hyper Bright",
+        "HB Steinway D Prepared",
+        "HB Steinway D Honky Tonk",
+    ]
+
+    preset = random.choice(presets)
+
+    # Safely quote the preset name, MIDI path, and WAV path
+    safe_preset = shlex.quote(preset)
+    safe_mid_path = shlex.quote(mid_path)
+    safe_wav_path = shlex.quote(wav_path)
+
+    # Construct the command
+    command = f"/home/mchorse/pianoteq/x86-64bit/Pianoteq\\ 8\\ STAGE --preset {safe_preset} --midi {safe_mid_path} --wav {safe_wav_path}"
+
+    return command
 
 
 def write_features(audio_path: str, mid_path: str, save_path: str):
@@ -121,7 +189,7 @@ def write_synth_features(cli_cmd_fn: Callable, mid_path: str, save_path: str):
 
     try:
         get_synth_audio(
-            cli_cmd=cli_cmd_fn, mid_path=mid_path, wav_path=audio_path_temp
+            cli_cmd_fn=cli_cmd_fn, mid_path=mid_path, wav_path=audio_path_temp
         )
     except:
         if os.path.isfile(audio_path_temp):
@@ -133,7 +201,11 @@ def write_synth_features(cli_cmd_fn: Callable, mid_path: str, save_path: str):
             mid_path=mid_path,
             return_json=False,
         )
-        os.remove(audio_path_temp)
+
+        if os.path.isfile(audio_path_temp):
+            os.remove(audio_path_temp)
+
+    print(f"Found {len(features)}")
 
     with open(save_path, mode="a") as file:
         for wav, seq in features:
@@ -174,7 +246,11 @@ def build_synth_worker_fn(
 
     while not load_path_queue.empty():
         mid_path = load_path_queue.get()
-        write_synth_features(cli_cmd, mid_path, worker_save_path)
+        try:
+            write_synth_features(cli_cmd, mid_path, worker_save_path)
+        except Exception as e:
+            print("Failed")
+            print(e)
 
     save_path_queue.put(worker_save_path)
 
@@ -239,7 +315,7 @@ class AmtDataset(torch.utils.data.Dataset):
             seq_len=self.config["max_seq_len"],
         )
 
-        return wav, self.tokenizer.encode(src), self.tokenizer.encode(tgt)
+        return wav, self.tokenizer.encode(src), self.tokenizer.encode(tgt), idx
 
     def _build_index(self):
         self.file_mmap.seek(0)
@@ -254,7 +330,7 @@ class AmtDataset(torch.utils.data.Dataset):
 
         return index
 
-    def _save_index(self, index: list[int], save_path: str):
+    def _save_index(self, index: list, save_path: str):
         with open(save_path, "w") as file:
             for idx in index:
                 file.write(f"{idx}\n")
@@ -325,7 +401,7 @@ class AmtDataset(torch.utils.data.Dataset):
             ]
         else:
             # Build synthetic dataset
-            assert len(load_paths[0]) == 1, "Invalid load paths"
+            assert isinstance(load_paths[0], str), "Invalid load paths"
             print("Building synthetic dataset")
             worker_processes = [
                 Process(

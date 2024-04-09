@@ -191,16 +191,17 @@ class AudioTransform(torch.nn.Module):
         max_snr: int = 50,
         max_dist_gain: int = 25,
         min_dist_gain: int = 0,
-        noise_ratio: float = 0.95,
-        reverb_ratio: float = 0.95,
+        noise_ratio: float = 0.75,
+        reverb_ratio: float = 0.75,
         applause_ratio: float = 0.01,
         bandpass_ratio: float = 0.15,
         distort_ratio: float = 0.15,
         reduce_ratio: float = 0.01,
-        detune_ratio: float = 0.1,
-        detune_max_shift: float = 0.15,
-        spec_aug_ratio: float = 0.5,
         max_num_transforms: int = None,  # currently we're doing 8 different transformations
+        detune_ratio: float = 0.0,
+        detune_max_shift: float = 0.0,
+        spec_aug_ratio: float = 0.9,
+
     ):
         super().__init__()
         self.tokenizer = AmtTokenizer()
@@ -224,7 +225,6 @@ class AudioTransform(torch.nn.Module):
         self.detune_ratio = detune_ratio
         self.detune_max_shift = detune_max_shift
         self.spec_aug_ratio = spec_aug_ratio
-        self.reduction_resample_rate = 6000  # Hardcoded?
         # the following two variables, `self.t_count` and `self.max_num_transforms`
         # are state variables that track the # of transformations applied.
         # `self.t_count` is set in `forward` method to 0
@@ -233,6 +233,9 @@ class AudioTransform(torch.nn.Module):
         # a little messy/stateful, but helps the code be backwards compatible.
         self.t_count = None
         self.max_num_transforms = max_num_transforms
+        self.time_mask_param = 2500
+        self.freq_mask_param = 15
+        self.reduction_resample_rate = 6000
 
         # Audio aug
         impulse_paths = self._get_paths(
@@ -272,10 +275,10 @@ class AudioTransform(torch.nn.Module):
         )
         self.spec_aug = torch.nn.Sequential(
             torchaudio.transforms.FrequencyMasking(
-                freq_mask_param=15, iid_masks=True
+                freq_mask_param=self.freq_mask_param, iid_masks=True
             ),
             torchaudio.transforms.TimeMasking(
-                time_mask_param=1000, iid_masks=True
+                time_mask_param=self.time_mask_param, iid_masks=True
             ),
         )
 
@@ -318,6 +321,8 @@ class AudioTransform(torch.nn.Module):
             "detune_ratio": self.detune_ratio,
             "detune_max_shift": self.detune_max_shift,
             "spec_aug_ratio": self.spec_aug_ratio,
+            "time_mask_param": self.time_mask_param,
+            "freq_mask_param": self.freq_mask_param,
         }
 
     def _get_paths(self, dir_path):
