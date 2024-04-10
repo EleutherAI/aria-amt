@@ -348,7 +348,9 @@ def _train(
                 # Backwards step
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
-                    grad_norm = accelerator.clip_grad_norm_(model.parameters(), 1.0).item()
+                    grad_norm = accelerator.clip_grad_norm_(
+                        model.parameters(), 1.0
+                    ).item()
                 else:
                     grad_norm = 0
                 optimizer.step()

@@ -518,7 +518,7 @@ class AmtTokenizer(Tokenizer):
                         seq[i, j] = tok_to_id.get(
                             (msg_type, pitch + shift), unk_tok
                         )
-                    if (
+                    elif (
                         type(tok) is tuple
                         and tok[0] == "prev"
                         and tok[1] != "pedal"
@@ -526,7 +526,6 @@ class AmtTokenizer(Tokenizer):
                         seq[i, j] = tok_to_id.get(
                             ("prev", tok[1] + shift), unk_tok
                         )
-
                     elif tok == pad_tok:
                         break
 
