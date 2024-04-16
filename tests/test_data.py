@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 
 from amt.data import get_wav_mid_segments, AmtDataset
 from amt.tokenizer import AmtTokenizer
-from amt.audio import AudioTransform, log_mel_spectrogram
+from amt.audio import AudioTransform
 from amt.train import get_dataloaders
 from aria.data.midi import MidiDict
 
@@ -188,13 +188,6 @@ class TestAug(unittest.TestCase):
         torchaudio.save("tests/test_results/orig.wav", wav, SAMPLE_RATE)
         torchaudio.save("tests/test_results/shift.wav", shift_wav, SAMPLE_RATE)
 
-        log_mel = log_mel_spectrogram(wav)
-        plot_spec(log_mel.squeeze(0), "orig")
-
-        _mel = audio_transform.mel_transform(spec)
-        _log_mel = audio_transform.norm_mel(_mel)
-        plot_spec(_log_mel.squeeze(0), "new")
-
     def test_pitch_aug(self):
         tokenizer = AmtTokenizer(return_tensors=True)
         tensor_pitch_aug_fn = tokenizer.export_tensor_pitch_aug()
@@ -243,13 +236,6 @@ class TestAug(unittest.TestCase):
         torchaudio.save("tests/test_results/orig.wav", wav, SAMPLE_RATE)
         torchaudio.save("tests/test_results/orig_gl.wav", gl_wav, SAMPLE_RATE)
         torchaudio.save("tests/test_results/detune.wav", shift_wav, SAMPLE_RATE)
-
-        log_mel = log_mel_spectrogram(wav)
-        plot_spec(log_mel.squeeze(0), "orig")
-
-        _mel = audio_transform.mel_transform(spec)
-        _log_mel = audio_transform.norm_mel(_mel)
-        plot_spec(_log_mel.squeeze(0), "new")
 
     def test_mels(self):
         SAMPLE_RATE, CHUNK_LEN = 16000, 30
