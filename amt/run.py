@@ -115,6 +115,8 @@ def build_synth(
         test_paths,
     ) = get_synth_mid_paths(mid_dir, csv_path)
 
+    print(f"Found {len(train_paths)} train and {len(test_paths)} test paths")
+
     print(f"Building {train_file}")
     AmtDataset.build(
         load_paths=train_paths,
@@ -186,6 +188,10 @@ def build_maestro(maestro_dir, train_file, val_file, test_file, num_procs):
         matched_paths_val,
         matched_paths_test,
     ) = get_matched_maestro_paths(maestro_dir)
+
+    print(
+        f"Found {len(matched_paths_train)}, {len(matched_paths_val)}, {len(matched_paths_test)} train, val, and test paths"
+    )
 
     print(f"Building {train_file}")
     AmtDataset.build(

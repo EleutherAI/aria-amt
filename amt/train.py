@@ -1,7 +1,6 @@
 import os
 import sys
 import csv
-import math
 import random
 import functools
 import argparse
@@ -25,7 +24,7 @@ from amt.data import AmtDataset
 from amt.config import load_model_config
 from aria.utils import _load_weight
 
-GRADIENT_ACC_STEPS = 2
+GRADIENT_ACC_STEPS = 32
 
 # ----- USAGE -----
 #
@@ -175,9 +174,9 @@ def get_pretrain_optim(
     num_epochs: int,
     steps_per_epoch: int,
 ):
-    LR = 3e-4
+    LR = 5e-4
     END_RATIO = 0.1
-    WARMUP_STEPS = 500
+    WARMUP_STEPS = 1000
 
     return _get_optim(
         lr=LR,
@@ -209,22 +208,22 @@ def get_finetune_optim(
 
 
 def get_dataloaders(
-    train_data_path: str,
+    train_data_paths: str,
     val_data_path: str,
     batch_size: int,
     num_workers: int,
 ):
     logger = get_logger(__name__)
     logger.info("Indexing datasets...")
-    train_dataset = AmtDataset(load_path=train_data_path)
-    val_dataset = AmtDataset(load_path=val_data_path)
+    train_dataset = AmtDataset(load_paths=train_data_paths)
+    val_dataset = AmtDataset(load_paths=val_data_path)
     logger.info(
         f"Loaded datasets with length: train={len(train_dataset)}; val={len(val_dataset)}"
     )
 
     # Pitch aug (to the sequence tensors) must be applied in the train
     # dataloader as it needs to be done to every element in the batch equally.
-    # Having this code running on the main process was causing a bottlekneck.
+    # Having this code running on the main process was causing a bottleneck.
     # Furthermore, distortion runs very slowly on the gpu, so we do it in
     # the dataloader instead.
     tensor_pitch_aug = AmtTokenizer().export_tensor_pitch_aug()
@@ -258,6 +257,34 @@ def get_dataloaders(
     )
 
     return train_dataloader, val_dataloader
+
+
+def plot_spec(mel: torch.Tensor, name: str | int):
+    import matplotlib.pyplot as plt
+
+    plt.figure(figsize=(10, 4))
+    plt.imshow(mel, aspect="auto", origin="lower", cmap="viridis")
+    plt.colorbar(format="%+2.0f dB")
+    plt.title("(mel)-Spectrogram")
+    plt.tight_layout()
+    plt.savefig(name)
+    plt.close()
+
+
+def _debug(wav, mel, src, tgt, idx):
+    print("Running debug", idx)
+    for _idx in range(wav.shape[0]):
+        if os.path.isdir(f"debug/{idx}") is False:
+            os.makedirs(f"debug/{idx}")
+        torchaudio.save(
+            f"debug/{idx}/wav_{_idx}.wav", wav[_idx].unsqueeze(0).cpu(), 16000
+        )
+        plot_spec(mel[_idx].cpu(), f"debug/{idx}/mel_{_idx}.png")
+        tokenizer = AmtTokenizer()
+        src_dec = tokenizer.decode(src[_idx])
+        mid_dict = tokenizer._detokenize_midi_dict(src_dec, 30000)
+        mid = mid_dict.to_midi()
+        mid.save(f"debug/{idx}/mid_{_idx}.mid")
 
 
 def _train(
@@ -520,7 +547,7 @@ def _train(
 # how to register and restore this random state during checkpointing.
 def resume_train(
     model_name: str,
-    train_data_path: str,
+    train_data_paths: str,
     val_data_path: str,
     mode: str,
     num_workers: int,
@@ -539,9 +566,8 @@ def resume_train(
     assert batch_size > 0, "Invalid batch size"
     assert torch.cuda.is_available() is True, "CUDA not available"
     assert os.path.isdir(checkpoint_dir), f"No dir at {checkpoint_dir}"
-    assert os.path.isfile(
-        train_data_path
-    ), f"No file found at {train_data_path}"
+    for _path in train_data_paths:
+        assert os.path.isfile(_path), f"No file found at {_path}"
     assert os.path.isfile(val_data_path), f"No file found at {val_data_path}"
 
     tokenizer = AmtTokenizer()
@@ -567,7 +593,9 @@ def resume_train(
         f"model_name={model_name}, "
         f"mode={mode}, "
         f"epochs={epochs}, "
+        f"num_proc={accelerator.num_processes}, "
         f"batch_size={batch_size}, "
+        f"grad_acc_steps={GRADIENT_ACC_STEPS}, "
         f"num_workers={num_workers}, "
         f"checkpoint_dir={checkpoint_dir}, "
         f"resume_step={resume_step}, "
@@ -586,7 +614,7 @@ def resume_train(
     logger.info(f"Loaded transform with config: {audio_transform.get_params()}")
 
     train_dataloader, val_dataloader = get_dataloaders(
-        train_data_path=train_data_path,
+        train_data_paths=train_data_paths,
         val_data_path=val_data_path,
         batch_size=batch_size,
         num_workers=num_workers,
@@ -654,7 +682,7 @@ def resume_train(
 
 def train(
     model_name: str,
-    train_data_path: str,
+    train_data_paths: str,
     val_data_path: str,
     mode: str,
     num_workers: int,
@@ -670,9 +698,8 @@ def train(
     assert epochs > 0, "Invalid number of epochs"
     assert batch_size > 0, "Invalid batch size"
     assert torch.cuda.is_available() is True, "CUDA not available"
-    assert os.path.isfile(
-        train_data_path
-    ), f"No file found at {train_data_path}"
+    for _path in train_data_paths:
+        assert os.path.isfile(_path), f"No file found at {_path}"
     assert os.path.isfile(val_data_path), f"No file found at {val_data_path}"
     if mode == "finetune":
         assert os.path.isfile(finetune_cp_path), "Invalid checkpoint path"
@@ -692,7 +719,9 @@ def train(
         f"model_name={model_name}, "
         f"mode={mode}, "
         f"epochs={epochs}, "
+        f"num_proc={accelerator.num_processes}, "
         f"batch_size={batch_size}, "
+        f"grad_acc_steps={GRADIENT_ACC_STEPS}, "
         f"num_workers={num_workers}"
     )
 
@@ -714,7 +743,7 @@ def train(
         )
 
     train_dataloader, val_dataloader = get_dataloaders(
-        train_data_path=train_data_path,
+        train_data_paths=train_data_paths,
         val_data_path=val_data_path,
         batch_size=batch_size,
         num_workers=num_workers,
@@ -798,8 +827,8 @@ def parse_resume_args():
     argp = argparse.ArgumentParser(prog="python amt/train.py resume")
     argp.add_argument("model", help="name of model config file")
     argp.add_argument("resume_mode", help="training mode", choices=["pt", "ft"])
-    argp.add_argument("train_data", help="path to train data")
-    argp.add_argument("val_data", help="path to val data")
+    argp.add_argument("-train_data", nargs="+", help="paths to train data")
+    argp.add_argument("-val_data", help="path to val data")
     argp.add_argument("-cdir", help="checkpoint dir", type=str, required=True)
     argp.add_argument("-rstep", help="resume step", type=int, required=True)
     argp.add_argument("-repoch", help="resume epoch", type=int, required=True)
@@ -817,8 +846,8 @@ def parse_resume_args():
 def parse_train_args():
     argp = argparse.ArgumentParser(prog="python amt/train.py pretrain")
     argp.add_argument("model", help="name of model config file")
-    argp.add_argument("train_data", help="path to train dir")
-    argp.add_argument("val_data", help="path to val dir")
+    argp.add_argument("-train_data", nargs="+", help="paths to train data")
+    argp.add_argument("-val_data", help="path to val dir")
     argp.add_argument(
         "-cpath", help="resuming checkpoint", type=str, required=False
     )
@@ -851,7 +880,7 @@ if __name__ == "__main__":
         train_args = parse_train_args()
         train(
             model_name=train_args.model,
-            train_data_path=train_args.train_data,
+            train_data_paths=train_args.train_data,
             val_data_path=train_args.val_data,
             mode="pretrain",
             num_workers=train_args.workers,
@@ -864,7 +893,7 @@ if __name__ == "__main__":
         train_args = parse_train_args()
         train(
             model_name=train_args.model,
-            train_data_path=train_args.train_data,
+            train_data_paths=train_args.train_data,
             val_data_path=train_args.val_data,
             mode="finetune",
             num_workers=train_args.workers,
@@ -878,7 +907,7 @@ if __name__ == "__main__":
         resume_args = parse_resume_args()
         resume_train(
             model_name=resume_args.model,
-            train_data_path=resume_args.train_data,
+            train_data_paths=resume_args.train_data,
             val_data_path=resume_args.val_data,
             mode="pretrain" if resume_args.resume_mode == "pt" else "finetune",
             num_workers=resume_args.workers,

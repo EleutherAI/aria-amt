@@ -85,7 +85,7 @@ def get_wav_mid_segments(
                 midi_dict=midi_dict,
                 start_ms=idx // samples_per_ms,
                 end_ms=(idx + num_samples) / samples_per_ms,
-                max_pedal_len_ms=10000,
+                max_pedal_len_ms=15000,
             )
 
             # Hardcoded to 2.5s
@@ -148,8 +148,8 @@ def pianoteq_cmd_fn(mid_path: str, wav_path: str):
     safe_mid_path = shlex.quote(mid_path)
     safe_wav_path = shlex.quote(wav_path)
 
-    # Construct the command
-    command = f"/home/mchorse/pianoteq/x86-64bit/Pianoteq\\ 8\\ STAGE --preset {safe_preset} --midi {safe_mid_path} --wav {safe_wav_path}"
+    executable_path = "/home/loubb/pianoteq/x86-64bit/Pianoteq 8 STAGE"
+    command = f'"{executable_path}" --preset {safe_preset} --midi {safe_mid_path} --wav {safe_wav_path}'
 
     return command
 
@@ -205,8 +205,6 @@ def write_synth_features(cli_cmd_fn: Callable, mid_path: str, save_path: str):
         if os.path.isfile(audio_path_temp):
             os.remove(audio_path_temp)
 
-    print(f"Found {len(features)}")
-
     with open(save_path, mode="a") as file:
         for wav, seq in features:
             wav_buffer = io.BytesIO()
@@ -256,34 +254,37 @@ def build_synth_worker_fn(
 
 
 class AmtDataset(torch.utils.data.Dataset):
-    def __init__(self, load_path: str):
+    def __init__(self, load_paths: str | list):
         self.tokenizer = AmtTokenizer(return_tensors=True)
         self.config = load_config()["data"]
         self.mixup_fn = self.tokenizer.export_msg_mixup()
-        self.file_buff = open(load_path, mode="r")
-        self.file_mmap = mmap.mmap(
-            self.file_buff.fileno(), 0, access=mmap.ACCESS_READ
-        )
 
-        index_path = AmtDataset._get_index_path(load_path=load_path)
-        if os.path.isfile(index_path) is True:
-            self.index = self._load_index(load_path=index_path)
-        else:
-            print("Calculating index...")
-            self.index = self._build_index()
-            print(
-                f"Index of length {len(self.index)} calculated, saving to {index_path}"
+        if isinstance(load_paths, str):
+            load_paths = [load_paths]
+        self.file_buffs = []
+        self.file_mmaps = []
+        self.index = []
+
+        for path in load_paths:
+            buff = open(path, mode="r")
+            self.file_buffs.append(buff)
+            mmap_obj = mmap.mmap(buff.fileno(), 0, access=mmap.ACCESS_READ)
+            self.file_mmaps.append(mmap_obj)
+
+            index_path = AmtDataset._get_index_path(load_path=path)
+            if os.path.isfile(index_path):
+                _index = self._load_index(load_path=index_path)
+            else:
+                print("Calculating index...")
+                _index = self._build_index(mmap_obj)
+                print(
+                    f"Index of length {len(_index)} calculated, saving to {index_path}"
+                )
+                self._save_index(index=_index, save_path=index_path)
+
+            self.index.extend(
+                [(len(self.file_mmaps) - 1, pos) for pos in _index]
             )
-            self._save_index(index=self.index, save_path=index_path)
-
-    def close(self):
-        if self.file_buff:
-            self.file_buff.close()
-        if self.file_mmap:
-            self.file_mmap.close()
-
-    def __del__(self):
-        self.close()
 
     def __len__(self):
         return len(self.index)
@@ -295,13 +296,13 @@ class AmtDataset(torch.utils.data.Dataset):
                 return tuple(tok)
             return tok
 
-        self.file_mmap.seek(self.index[idx])
+        file_id, pos = self.index[idx]
+        mmap_obj = self.file_mmaps[file_id]
+        mmap_obj.seek(pos)
 
         # Load data from line
-        wav = torch.load(
-            io.BytesIO(base64.b64decode(self.file_mmap.readline()))
-        )
-        _seq = orjson.loads(base64.b64decode(self.file_mmap.readline()))
+        wav = torch.load(io.BytesIO(base64.b64decode(mmap_obj.readline())))
+        _seq = orjson.loads(base64.b64decode(mmap_obj.readline()))
 
         _seq = [_format(tok) for tok in _seq]  # Format seq
         _seq = self.mixup_fn(_seq)  # Data augmentation
@@ -317,18 +318,14 @@ class AmtDataset(torch.utils.data.Dataset):
 
         return wav, self.tokenizer.encode(src), self.tokenizer.encode(tgt), idx
 
-    def _build_index(self):
-        self.file_mmap.seek(0)
-        index = []
-        while True:
-            pos = self.file_mmap.tell()
-            self.file_mmap.readline()
-            if self.file_mmap.readline() == b"":
-                break
-            else:
-                index.append(pos)
+    def close(self):
+        for buff in self.file_buffs:
+            buff.close()
+        for mmap in self.file_mmaps:
+            mmap.close()
 
-        return index
+    def __del__(self):
+        self.close()
 
     def _save_index(self, index: list, save_path: str):
         with open(save_path, "w") as file:
@@ -345,17 +342,17 @@ class AmtDataset(torch.utils.data.Dataset):
             f"{load_path.rsplit('.', 1)[0]}_index.{load_path.rsplit('.', 1)[1]}"
         )
 
-    def _build_index(self):
-        self.file_mmap.seek(0)
+    def _build_index(self, mmap_obj):
+        mmap_obj.seek(0)
         index = []
         pos = 0
         while True:
             pos_buff = pos
 
-            pos = self.file_mmap.find(b"\n", pos)
+            pos = mmap_obj.find(b"\n", pos)
             if pos == -1:
                 break
-            pos = self.file_mmap.find(b"\n", pos + 1)
+            pos = mmap_obj.find(b"\n", pos + 1)
             if pos == -1:
                 break
 
@@ -433,16 +430,10 @@ class AmtDataset(torch.utils.data.Dataset):
         if shutil.which("cat") is None:
             print("The GNU cat command is not available")
         else:
-            print("Concatinating sharded dataset files")
-            shell_cmd = f"cat "
             for _path in sharded_save_paths:
-                shell_cmd += f"{_path} "
-                print()
-            shell_cmd += f">> {save_path}"
-
-            os.system(shell_cmd)
-            for _path in sharded_save_paths:
+                shell_cmd = f"cat {_path} >> {save_path}"
+                os.system(shell_cmd)
                 os.remove(_path)
 
         # Create index by loading object
-        AmtDataset(load_path=save_path)
+        AmtDataset(load_paths=save_path)
