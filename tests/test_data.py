@@ -13,12 +13,14 @@ from amt.audio import AudioTransform, log_mel_spectrogram
 from amt.train import get_dataloaders
 from aria.data.midi import MidiDict
 
+from torch.utils.data import DataLoader
+
 
 logging.basicConfig(level=logging.INFO)
 if os.path.isdir("tests/test_results") is False:
     os.mkdir("tests/test_results")
 
-MAESTRO_PATH = "/mnt/ssd1/amt/training_data/train.txt"
+MAESTRO_PATH = "/mnt/ssd1/amt/training_data/maestro/train-s15.txt"
 
 
 def plot_spec(mel: torch.Tensor, name: str | int):
@@ -68,13 +70,43 @@ class TestAmtDataset(unittest.TestCase):
             ).to_midi()
             mid.save(f"tests/test_results/trunc_{idx}.mid")
 
+    def test_build_multiple(self):
+        matched_paths = [
+            ("tests/test_data/maestro.wav", "tests/test_data/maestro1.mid")
+            for _ in range(2)
+        ]
+        if os.path.isfile("tests/test_results/dataset_1.jsonl"):
+            os.remove("tests/test_results/dataset_1.jsonl")
+        if os.path.isfile("tests/test_results/dataset_2.jsonl"):
+            os.remove("tests/test_results/dataset_2.jsonl")
+
+        AmtDataset.build(
+            load_paths=matched_paths,
+            save_path="tests/test_results/dataset_1.jsonl",
+        )
+
+        AmtDataset.build(
+            load_paths=matched_paths,
+            save_path="tests/test_results/dataset_2.jsonl",
+        )
+
+        dataset = AmtDataset(
+            [
+                "tests/test_results/dataset_1.jsonl",
+                "tests/test_results/dataset_2.jsonl",
+            ]
+        )
+
+        for idx, (wav, src, tgt, idx) in enumerate(dataset):
+            print(wav.shape, src.shape, tgt.shape)
+
     def test_maestro(self):
         if not os.path.isfile(MAESTRO_PATH):
             return
 
         tokenizer = AmtTokenizer()
         audio_transform = AudioTransform()
-        dataset = AmtDataset(load_path=MAESTRO_PATH)
+        dataset = AmtDataset(load_paths=MAESTRO_PATH)
         print(f"Dataset length: {len(dataset)}")
         for idx, (wav, src, tgt, __idx) in enumerate(dataset):
             src_dec, tgt_dec = tokenizer.decode(src), tokenizer.decode(tgt)
@@ -104,6 +136,34 @@ class TestAmtDataset(unittest.TestCase):
             self.assertTrue(tokenizer.unk_tok not in tgt_dec)
             for src_tok, tgt_tok in zip(src_dec[1:], tgt_dec):
                 self.assertEqual(src_tok, tgt_tok)
+
+    def test_tensor_pitch_aug(self):
+        tokenizer = AmtTokenizer()
+        audio_transform = AudioTransform()
+        dataset = AmtDataset(load_paths=MAESTRO_PATH)
+        tensor_pitch_aug = AmtTokenizer().export_tensor_pitch_aug()
+
+        dataloader = DataLoader(
+            dataset,
+            batch_size=4,
+            num_workers=1,
+            shuffle=False,
+        )
+
+        for batch in dataloader:
+            wav, src, tgt, idxs = batch
+
+            src_p = tensor_pitch_aug(seq=src.clone(), shift=1)[0]
+            src_p_dec = tokenizer.decode(src_p)
+
+            src_np = src.clone()[0]
+            src_np_dec = tokenizer.decode(src_np)
+
+            for x, y in zip(src_p_dec, src_np_dec):
+                if x == "<P>":
+                    break
+                else:
+                    print(x, y)
 
 
 class TestAug(unittest.TestCase):
@@ -278,7 +338,7 @@ class TestDataLoader(unittest.TestCase):
 
     def test_profile_dl(self):
         train_dataloader, val_dataloader = get_dataloaders(
-            train_data_path="/weka/proj-aria/aria-amt/data/train.jsonl",
+            train_data_paths="/weka/proj-aria/aria-amt/data/train.jsonl",
             val_data_path="/weka/proj-aria/aria-amt/data/train.jsonl",
             batch_size=16,
             num_workers=0,
