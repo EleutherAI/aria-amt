@@ -106,15 +106,18 @@ def get_wav_mid_segments(
 
 def pianoteq_cmd_fn(mid_path: str, wav_path: str):
     presets = [
-        "C. Bechstein",
-        "C. Bechstein Close Mic",
-        "C. Bechstein Under Lid",
-        "C. Bechstein 440",
-        "C. Bechstein Recording",
-        "C. Bechstein Werckmeister III",
-        "C. Bechstein Neidhardt III",
-        "C. Bechstein mesotonic",
-        "C. Bechstein well tempered",
+        "C. Bechstein DG Prelude",
+        "C. Bechstein DG Sweet",
+        "C. Bechstein DG Felt I",
+        "C. Bechstein DG Felt II",
+        "C. Bechstein DG D 282",
+        "C. Bechstein DG Recording 1",
+        "C. Bechstein DG Recording 2",
+        "C. Bechstein DG Recording 3",
+        "C. Bechstein DG Cinematic",
+        "C. Bechstein DG Snappy",
+        "C. Bechstein DG Venue",
+        "C. Bechstein DG Player",
         "HB Steinway D Blues",
         "HB Steinway D Pop",
         "HB Steinway D New Age",
@@ -137,8 +140,6 @@ def pianoteq_cmd_fn(mid_path: str, wav_path: str):
         "HB Steinway D Cabaret",
         "HB Steinway D Bright",
         "HB Steinway D Hyper Bright",
-        "HB Steinway D Prepared",
-        "HB Steinway D Honky Tonk",
     ]
 
     preset = random.choice(presets)
