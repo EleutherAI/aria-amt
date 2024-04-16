@@ -28,7 +28,8 @@ yt-dlp --audio-format mp3 --extract-audio --no-playlist --audio-quality 0 <youtu
 
 You can then transcribe using the cli: 
 
-```aria-amt transcribe \
+```
+aria-amt transcribe \
     small-final \
     <path-to-checkpoint> \
     -load_path <path-to-audio> \
