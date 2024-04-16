@@ -23,6 +23,7 @@ N_SAMPLES_PER_TOKEN = HOP_LENGTH * 2  # the initial convolutions has stride 2
 FRAMES_PER_SECOND = SAMPLE_RATE // HOP_LENGTH  # 10ms per audio frame
 TOKENS_PER_SECOND = SAMPLE_RATE // N_SAMPLES_PER_TOKEN  # 20ms per audio token
 
+
 def pad_or_trim(array, length: int = N_SAMPLES, *, axis: int = -1):
     """
     Pad or trim the audio array to N_SAMPLES, as expected by the encoder.
@@ -49,6 +50,7 @@ def pad_or_trim(array, length: int = N_SAMPLES, *, axis: int = -1):
             array = np.pad(array, pad_widths)
 
     return array
+
 
 # Refactor default params are stored in config.json
 class AudioTransform(torch.nn.Module):
