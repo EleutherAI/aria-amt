@@ -4,7 +4,9 @@ import os
 import random
 import torch
 import torchaudio
+import torch.nn.functional as F
 import torchaudio.functional as AF
+import numpy as np
 
 from amt.config import load_config
 from amt.tokenizer import AmtTokenizer
@@ -20,6 +22,34 @@ N_FRAMES = N_SAMPLES // HOP_LENGTH  # 3000 frames in a mel spectrogram input
 N_SAMPLES_PER_TOKEN = HOP_LENGTH * 2  # the initial convolutions has stride 2
 FRAMES_PER_SECOND = SAMPLE_RATE // HOP_LENGTH  # 10ms per audio frame
 TOKENS_PER_SECOND = SAMPLE_RATE // N_SAMPLES_PER_TOKEN  # 20ms per audio token
+
+
+def pad_or_trim(array, length: int = N_SAMPLES, *, axis: int = -1):
+    """
+    Pad or trim the audio array to N_SAMPLES, as expected by the encoder.
+    """
+    if torch.is_tensor(array):
+        if array.shape[axis] > length:
+            array = array.index_select(
+                dim=axis, index=torch.arange(length, device=array.device)
+            )
+
+        if array.shape[axis] < length:
+            pad_widths = [(0, 0)] * array.ndim
+            pad_widths[axis] = (0, length - array.shape[axis])
+            array = F.pad(
+                array, [pad for sizes in pad_widths[::-1] for pad in sizes]
+            )
+    else:
+        if array.shape[axis] > length:
+            array = array.take(indices=range(length), axis=axis)
+
+        if array.shape[axis] < length:
+            pad_widths = [(0, 0)] * array.ndim
+            pad_widths[axis] = (0, length - array.shape[axis])
+            array = np.pad(array, pad_widths)
+
+    return array
 
 
 # Refactor default params are stored in config.json
@@ -39,7 +69,7 @@ class AudioTransform(torch.nn.Module):
         reduce_ratio: float = 0.01,
         detune_ratio: float = 0.1,
         detune_max_shift: float = 0.15,
-        spec_aug_ratio: float = 0.95,
+        spec_aug_ratio: float = 0.9,
     ):
         super().__init__()
         self.tokenizer = AmtTokenizer()
@@ -105,11 +135,12 @@ class AudioTransform(torch.nn.Module):
             n_stft=self.config["n_fft"] // 2 + 1,
         )
         self.spec_aug = torch.nn.Sequential(
+            torchaudio.transforms.TimeMasking(
+                time_mask_param=self.time_mask_param,
+                iid_masks=True,
+            ),
             torchaudio.transforms.FrequencyMasking(
                 freq_mask_param=self.freq_mask_param, iid_masks=True
-            ),
-            torchaudio.transforms.TimeMasking(
-                time_mask_param=self.time_mask_param, iid_masks=True
             ),
         )
 

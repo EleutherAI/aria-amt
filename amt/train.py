@@ -2,6 +2,7 @@ import os
 import sys
 import csv
 import random
+import traceback
 import functools
 import argparse
 import logging
@@ -24,7 +25,7 @@ from amt.data import AmtDataset
 from amt.config import load_model_config
 from aria.utils import _load_weight
 
-GRADIENT_ACC_STEPS = 32
+GRADIENT_ACC_STEPS = 2
 
 # ----- USAGE -----
 #
@@ -143,7 +144,7 @@ def _get_optim(
         model.parameters(),
         lr=lr,
         weight_decay=0.1,
-        betas=(0.9, 0.98),
+        betas=(0.9, 0.95),
         eps=1e-6,
     )
 
@@ -312,6 +313,22 @@ def _train(
             f"EPOCH {_epoch}/{epochs + start_epoch}: Saving checkpoint - {checkpoint_dir}"
         )
         _accelerator.save_state(checkpoint_dir)
+        
+    def log_activation_norms(_model: AmtEncoderDecoder, _accelerator: accelerate.Accelerator):
+        for idx, block in enumerate(_model.decoder.blocks):
+            x_norm = _accelerator.gather(block.attn.x_norm).mean()
+            q_norm = _accelerator.gather(block.attn.q_norm).mean()
+            k_norm = _accelerator.gather(block.attn.k_norm).mean()
+            v_norm = _accelerator.gather(block.attn.v_norm).mean()
+            out_norm = _accelerator.gather(block.attn.out_norm).mean()
+            logger.debug(f"{idx}.attn - x: {x_norm}, q: {q_norm}, k: {k_norm}, v: {v_norm}, out: {out_norm}")
+
+            x_norm = _accelerator.gather(block.cross_attn.x_norm).mean()
+            q_norm = _accelerator.gather(block.cross_attn.q_norm).mean()
+            k_norm = _accelerator.gather(block.cross_attn.k_norm).mean()
+            v_norm = _accelerator.gather(block.cross_attn.v_norm).mean()
+            out_norm = _accelerator.gather(block.cross_attn.out_norm).mean()
+            logger.debug(f"{idx}.cross_attn - x: {x_norm}, q: {q_norm}, k: {k_norm}, v: {v_norm}, out: {out_norm}")
 
     def get_max_norm(named_parameters):
         max_grad_norm = {"val": 0.0}
@@ -344,6 +361,7 @@ def _train(
             lr_for_print = "{:.2e}".format(optimizer.param_groups[-1]["lr"])
 
         model.train()
+        grad_norm = 0.0
         for __step, batch in (
             pbar := tqdm(
                 enumerate(dataloader),
@@ -378,8 +396,6 @@ def _train(
                     grad_norm = accelerator.clip_grad_norm_(
                         model.parameters(), 1.0
                     ).item()
-                else:
-                    grad_norm = 0
                 optimizer.step()
                 optimizer.zero_grad()
 
@@ -398,7 +414,8 @@ def _train(
                 pbar.set_postfix_str(
                     f"lr={lr_for_print}, "
                     f"loss={round(loss_buffer[-1], 4)}, "
-                    f"trailing={round(trailing_loss, 4)}"
+                    f"trailing={round(trailing_loss, 4)}, "
+                    f"grad_norm={round(grad_norm, 4)}"
                 )
 
                 if scheduler:
@@ -470,6 +487,7 @@ def _train(
     PAD_ID = train_dataloader.dataset.tokenizer.pad_id
     logger = get_logger(__name__)  # Accelerate logger
     loss_fn = nn.CrossEntropyLoss(ignore_index=PAD_ID)
+
     logger.info(
         f"Model has "
         f"{'{:,}'.format(sum(p.numel() for p in model.parameters() if p.requires_grad))} "
@@ -522,19 +540,27 @@ def _train(
             )
 
     for epoch in range(start_epoch, epochs + start_epoch):
-        avg_train_loss = train_loop(dataloader=train_dataloader, _epoch=epoch)
-        avg_val_loss = val_loop(
-            dataloader=val_dataloader, _epoch=epoch, aug=False
-        )
-        avg_val_loss_aug = val_loop(
-            dataloader=val_dataloader, _epoch=epoch, aug=True
-        )
-        if accelerator.is_main_process:
-            epoch_writer.writerow(
-                [epoch, avg_train_loss, avg_val_loss, avg_val_loss_aug]
+        try:
+            avg_train_loss = train_loop(
+                dataloader=train_dataloader, _epoch=epoch
             )
-            epoch_csv.flush()
-            make_checkpoint(_accelerator=accelerator, _epoch=epoch + 1, _step=0)
+            avg_val_loss = val_loop(
+                dataloader=val_dataloader, _epoch=epoch, aug=False
+            )
+            avg_val_loss_aug = val_loop(
+                dataloader=val_dataloader, _epoch=epoch, aug=True
+            )
+            if accelerator.is_main_process:
+                epoch_writer.writerow(
+                    [epoch, avg_train_loss, avg_val_loss, avg_val_loss_aug]
+                )
+                epoch_csv.flush()
+                make_checkpoint(
+                    _accelerator=accelerator, _epoch=epoch + 1, _step=0
+                )
+        except Exception as e:
+            logger.debug(traceback.format_exc())
+            raise e
 
     logging.shutdown()
     if accelerator.is_main_process:

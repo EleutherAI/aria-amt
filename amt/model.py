@@ -54,6 +54,12 @@ class MultiHeadAttention(nn.Module):
         self.key = nn.Linear(n_state, n_state, bias=False)
         self.value = nn.Linear(n_state, n_state, bias=False)
         self.out = nn.Linear(n_state, n_state, bias=False)
+        
+        # self.x_norm = None
+        # self.q_norm = None
+        # self.k_norm = None
+        # self.v_norm = None
+        # self.out_norm = None
 
     def forward(
         self,
@@ -78,6 +84,11 @@ class MultiHeadAttention(nn.Module):
         q = q.view(batch_size, target_seq_len, self.n_head, self.d_head)
         k = k.view(batch_size, source_seq_len, self.n_head, self.d_head)
         v = v.view(batch_size, source_seq_len, self.n_head, self.d_head)
+        
+        # self.x_norm = torch.norm(x, dim=-1).mean()
+        # self.q_norm = torch.norm(q, dim=-1).mean()
+        # self.k_norm = torch.norm(k, dim=-1).mean()
+        # self.v_norm = torch.norm(v, dim=-1).mean()
 
         # (bz, L, nh, dh) -> (bz, nh, L, dh)
         q, k, v = map(lambda t: t.transpose(1, 2), (q, k, v))
@@ -93,12 +104,14 @@ class MultiHeadAttention(nn.Module):
             value=v,
             is_causal=_is_causal,
         )
+        
+        # self.out_norm = torch.norm(wv, dim=-1).mean()
 
         # (bz, nh, L, dh) -> (bz, L, nh, dh) -> (bz, L, d)
         wv = wv.transpose(1, 2)
         wv = wv.view(batch_size, target_seq_len, self.n_head * self.d_head)
 
-        return self.out(wv), None
+        return self.out(wv)
 
 
 class ResidualAttentionBlock(nn.Module):
@@ -129,9 +142,9 @@ class ResidualAttentionBlock(nn.Module):
         xa: Optional[Tensor] = None,
         mask: Optional[Tensor] = None,
     ):
-        x = x + self.attn(self.attn_ln(x), mask=mask)[0]
+        x = x + self.attn(self.attn_ln(x), mask=mask)
         if self.cross_attn:
-            x = x + self.cross_attn(self.cross_attn_ln(x), xa)[0]
+            x = x + self.cross_attn(self.cross_attn_ln(x), xa)
         x = x + self.mlp(self.mlp_ln(x))
         return x
 
@@ -188,6 +201,7 @@ class TextDecoder(nn.Module):
             ]
         )
         self.ln = nn.LayerNorm(n_state)
+        self.output = nn.Linear(n_state, n_vocab, bias=False)
 
         mask = torch.empty(n_ctx, n_ctx).fill_(-np.inf).triu_(1)
         self.register_buffer("mask", mask, persistent=False)
@@ -206,9 +220,11 @@ class TextDecoder(nn.Module):
             x = block(x, xa, mask=self.mask)
 
         x = self.ln(x)
-        logits = (
-            x @ torch.transpose(self.token_embedding.weight.to(x.dtype), 0, 1)
-        ).float()
+        logits = self.output(x)
+
+        # logits = (
+        #     x @ torch.transpose(self.token_embedding.weight.to(x.dtype), 0, 1)
+        # ).float()
 
         return logits
 
@@ -245,6 +261,3 @@ class AmtEncoderDecoder(nn.Module):
     @property
     def device(self):
         return next(self.parameters()).device
-
-    def get_empty_cache(self):
-        return {}

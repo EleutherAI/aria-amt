@@ -88,9 +88,9 @@ def get_wav_mid_segments(
                 max_pedal_len_ms=15000,
             )
 
-            # Hardcoded to 2.5s
-            if _check_onset_threshold(mid_feature, 2500) is False:
-                print("No note messages after 2.5s - skipping")
+            # Hardcoded to 10s
+            if _check_onset_threshold(mid_feature, 10500) is False:
+                print("No note messages after 10s - skipping")
                 continue
 
         else:
@@ -106,15 +106,18 @@ def get_wav_mid_segments(
 
 def pianoteq_cmd_fn(mid_path: str, wav_path: str):
     presets = [
-        "C. Bechstein",
-        "C. Bechstein Close Mic",
-        "C. Bechstein Under Lid",
-        "C. Bechstein 440",
-        "C. Bechstein Recording",
-        "C. Bechstein Werckmeister III",
-        "C. Bechstein Neidhardt III",
-        "C. Bechstein mesotonic",
-        "C. Bechstein well tempered",
+        "C. Bechstein DG Prelude",
+        "C. Bechstein DG Sweet",
+        "C. Bechstein DG Felt I",
+        "C. Bechstein DG Felt II",
+        "C. Bechstein DG D 282",
+        "C. Bechstein DG Recording 1",
+        "C. Bechstein DG Recording 2",
+        "C. Bechstein DG Recording 3",
+        "C. Bechstein DG Cinematic",
+        "C. Bechstein DG Snappy",
+        "C. Bechstein DG Venue",
+        "C. Bechstein DG Player",
         "HB Steinway D Blues",
         "HB Steinway D Pop",
         "HB Steinway D New Age",
@@ -137,8 +140,6 @@ def pianoteq_cmd_fn(mid_path: str, wav_path: str):
         "HB Steinway D Cabaret",
         "HB Steinway D Bright",
         "HB Steinway D Hyper Bright",
-        "HB Steinway D Prepared",
-        "HB Steinway D Honky Tonk",
     ]
 
     preset = random.choice(presets)
@@ -148,7 +149,7 @@ def pianoteq_cmd_fn(mid_path: str, wav_path: str):
     safe_mid_path = shlex.quote(mid_path)
     safe_wav_path = shlex.quote(wav_path)
 
-    executable_path = "/home/loubb/pianoteq/x86-64bit/Pianoteq 8 STAGE"
+    executable_path = "/mnt/ssd-1/aria/pianoteq/x86-64bit/Pianoteq 8 STAGE"
     command = f'"{executable_path}" --preset {safe_preset} --midi {safe_mid_path} --wav {safe_wav_path}'
 
     return command
