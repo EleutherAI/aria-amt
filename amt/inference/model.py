@@ -354,6 +354,7 @@ class TextDecoder(nn.Module):
             ]
         )
         self.ln = nn.LayerNorm(n_state)
+        self.output = nn.Linear(n_state, n_vocab, bias=False)
         self.register_buffer("causal_mask", None, persistent=False)
 
     def forward(
@@ -376,9 +377,7 @@ class TextDecoder(nn.Module):
             )
 
         x = self.ln(x)
-        logits = (
-            x @ torch.transpose(self.token_embedding.weight.to(x.dtype), 0, 1)
-        ).float()
+        logits = self.output(x)
 
         return logits
 
