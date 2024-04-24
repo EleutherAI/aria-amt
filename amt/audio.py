@@ -69,7 +69,7 @@ class AudioTransform(torch.nn.Module):
         reduce_ratio: float = 0.01,
         detune_ratio: float = 0.1,
         detune_max_shift: float = 0.15,
-        spec_aug_ratio: float = 0.95,
+        spec_aug_ratio: float = 0.9,
     ):
         super().__init__()
         self.tokenizer = AmtTokenizer()
@@ -135,11 +135,12 @@ class AudioTransform(torch.nn.Module):
             n_stft=self.config["n_fft"] // 2 + 1,
         )
         self.spec_aug = torch.nn.Sequential(
+            torchaudio.transforms.TimeMasking(
+                time_mask_param=self.time_mask_param,
+                iid_masks=True,
+            ),
             torchaudio.transforms.FrequencyMasking(
                 freq_mask_param=self.freq_mask_param, iid_masks=True
-            ),
-            torchaudio.transforms.TimeMasking(
-                time_mask_param=self.time_mask_param, iid_masks=True
             ),
         )
 

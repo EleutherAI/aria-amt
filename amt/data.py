@@ -88,9 +88,9 @@ def get_wav_mid_segments(
                 max_pedal_len_ms=15000,
             )
 
-            # Hardcoded to 2.5s
-            if _check_onset_threshold(mid_feature, 2500) is False:
-                print("No note messages after 2.5s - skipping")
+            # Hardcoded to 5s
+            if _check_onset_threshold(mid_feature, 5000) is False:
+                print("No note messages after 5s - skipping")
                 continue
 
         else:
@@ -149,7 +149,7 @@ def pianoteq_cmd_fn(mid_path: str, wav_path: str):
     safe_mid_path = shlex.quote(mid_path)
     safe_wav_path = shlex.quote(wav_path)
 
-    executable_path = "/home/loubb/pianoteq/x86-64bit/Pianoteq 8 STAGE"
+    executable_path = "/mnt/ssd-1/aria/pianoteq/x86-64bit/Pianoteq 8 STAGE"
     command = f'"{executable_path}" --preset {safe_preset} --midi {safe_mid_path} --wav {safe_wav_path}'
 
     return command

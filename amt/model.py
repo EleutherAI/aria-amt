@@ -98,7 +98,7 @@ class MultiHeadAttention(nn.Module):
         wv = wv.transpose(1, 2)
         wv = wv.view(batch_size, target_seq_len, self.n_head * self.d_head)
 
-        return self.out(wv), None
+        return self.out(wv)
 
 
 class ResidualAttentionBlock(nn.Module):
@@ -129,9 +129,9 @@ class ResidualAttentionBlock(nn.Module):
         xa: Optional[Tensor] = None,
         mask: Optional[Tensor] = None,
     ):
-        x = x + self.attn(self.attn_ln(x), mask=mask)[0]
+        x = x + self.attn(self.attn_ln(x), mask=mask)
         if self.cross_attn:
-            x = x + self.cross_attn(self.cross_attn_ln(x), xa)[0]
+            x = x + self.cross_attn(self.cross_attn_ln(x), xa)
         x = x + self.mlp(self.mlp_ln(x))
         return x
 
@@ -188,6 +188,7 @@ class TextDecoder(nn.Module):
             ]
         )
         self.ln = nn.LayerNorm(n_state)
+        self.output = nn.Linear(n_state, n_vocab, bias=False)
 
         mask = torch.empty(n_ctx, n_ctx).fill_(-np.inf).triu_(1)
         self.register_buffer("mask", mask, persistent=False)
@@ -206,9 +207,7 @@ class TextDecoder(nn.Module):
             x = block(x, xa, mask=self.mask)
 
         x = self.ln(x)
-        logits = (
-            x @ torch.transpose(self.token_embedding.weight.to(x.dtype), 0, 1)
-        ).float()
+        logits = self.output(x)
 
         return logits
 
@@ -245,6 +244,3 @@ class AmtEncoderDecoder(nn.Module):
     @property
     def device(self):
         return next(self.parameters()).device
-
-    def get_empty_cache(self):
-        return {}
