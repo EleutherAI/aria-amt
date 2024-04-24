@@ -54,12 +54,6 @@ class MultiHeadAttention(nn.Module):
         self.key = nn.Linear(n_state, n_state, bias=False)
         self.value = nn.Linear(n_state, n_state, bias=False)
         self.out = nn.Linear(n_state, n_state, bias=False)
-        
-        # self.x_norm = None
-        # self.q_norm = None
-        # self.k_norm = None
-        # self.v_norm = None
-        # self.out_norm = None
 
     def forward(
         self,
@@ -84,11 +78,6 @@ class MultiHeadAttention(nn.Module):
         q = q.view(batch_size, target_seq_len, self.n_head, self.d_head)
         k = k.view(batch_size, source_seq_len, self.n_head, self.d_head)
         v = v.view(batch_size, source_seq_len, self.n_head, self.d_head)
-        
-        # self.x_norm = torch.norm(x, dim=-1).mean()
-        # self.q_norm = torch.norm(q, dim=-1).mean()
-        # self.k_norm = torch.norm(k, dim=-1).mean()
-        # self.v_norm = torch.norm(v, dim=-1).mean()
 
         # (bz, L, nh, dh) -> (bz, nh, L, dh)
         q, k, v = map(lambda t: t.transpose(1, 2), (q, k, v))
@@ -104,8 +93,6 @@ class MultiHeadAttention(nn.Module):
             value=v,
             is_causal=_is_causal,
         )
-        
-        # self.out_norm = torch.norm(wv, dim=-1).mean()
 
         # (bz, nh, L, dh) -> (bz, L, nh, dh) -> (bz, L, d)
         wv = wv.transpose(1, 2)
@@ -221,10 +208,6 @@ class TextDecoder(nn.Module):
 
         x = self.ln(x)
         logits = self.output(x)
-
-        # logits = (
-        #     x @ torch.transpose(self.token_embedding.weight.to(x.dtype), 0, 1)
-        # ).float()
 
         return logits
 

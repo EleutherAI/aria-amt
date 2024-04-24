@@ -313,22 +313,6 @@ def _train(
             f"EPOCH {_epoch}/{epochs + start_epoch}: Saving checkpoint - {checkpoint_dir}"
         )
         _accelerator.save_state(checkpoint_dir)
-        
-    def log_activation_norms(_model: AmtEncoderDecoder, _accelerator: accelerate.Accelerator):
-        for idx, block in enumerate(_model.decoder.blocks):
-            x_norm = _accelerator.gather(block.attn.x_norm).mean()
-            q_norm = _accelerator.gather(block.attn.q_norm).mean()
-            k_norm = _accelerator.gather(block.attn.k_norm).mean()
-            v_norm = _accelerator.gather(block.attn.v_norm).mean()
-            out_norm = _accelerator.gather(block.attn.out_norm).mean()
-            logger.debug(f"{idx}.attn - x: {x_norm}, q: {q_norm}, k: {k_norm}, v: {v_norm}, out: {out_norm}")
-
-            x_norm = _accelerator.gather(block.cross_attn.x_norm).mean()
-            q_norm = _accelerator.gather(block.cross_attn.q_norm).mean()
-            k_norm = _accelerator.gather(block.cross_attn.k_norm).mean()
-            v_norm = _accelerator.gather(block.cross_attn.v_norm).mean()
-            out_norm = _accelerator.gather(block.cross_attn.out_norm).mean()
-            logger.debug(f"{idx}.cross_attn - x: {x_norm}, q: {q_norm}, k: {k_norm}, v: {v_norm}, out: {out_norm}")
 
     def get_max_norm(named_parameters):
         max_grad_norm = {"val": 0.0}
