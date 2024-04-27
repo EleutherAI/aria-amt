@@ -33,13 +33,13 @@ def get_matched_paths(audio_dir: str, mid_dir: str):
     return res
 
 
-def create_csv(matched_paths, csv_path):
+def create_csv(matched_paths, csv_path, ratio):
     split_csv = open(csv_path, "w")
     csv_writer = csv.writer(split_csv)
     csv_writer.writerow(["mid_path", "audio_path", "split"])
 
     for audio_path, mid_path in matched_paths:
-        if random.random() < 0.1:
+        if random.random() < ratio:
             csv_writer.writerow([mid_path, audio_path, "test"])
         else:
             csv_writer.writerow([mid_path, audio_path, "train"])
@@ -50,8 +50,9 @@ if __name__ == "__main__":
     parser.add_argument("-mid_dir", type=str)
     parser.add_argument("-audio_dir", type=str)
     parser.add_argument("-csv_path", type=str)
+    parser.add_argument("-ratio", type=int, default=0.1)
     args = parser.parse_args()
 
     matched_paths = get_matched_paths(args.audio_dir, args.mid_dir)
 
-    create_csv(matched_paths, args.csv_path)
+    create_csv(matched_paths, args.csv_path, args.ratio)

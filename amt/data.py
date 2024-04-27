@@ -371,6 +371,9 @@ class AmtDataset(torch.utils.data.Dataset):
         num_processes: int = 1,
     ):
         assert os.path.isfile(save_path) is False, f"{save_path} already exists"
+        assert (
+            len(save_path.rsplit(".", 1)) == 2
+        ), "path is missing a file extension"
 
         index_path = AmtDataset._get_index_path(load_path=save_path)
         if os.path.isfile(index_path):
