@@ -45,6 +45,6 @@ aria-amt transcribe \
     -q8
 ```
 
-If you want to do batch transcription, use the `-load_dir` flag and adjust `-bs` accordingly. Compiling and may take some time, but provides a significant speedup. Quantizing (`-q8`) further speeds up inference when the `-compile` flag is also used.
+If you want to do batch transcription, use the `-load_dir` flag and adjust `-bs` accordingly. Compiling and may take some time, but provides a significant speedup. Quantizing (`-q8` flag) further speeds up inference when the `-compile` flag is also used.
 
 NOTE: Int8 quantization is only supported on GPUs that support BF16.
