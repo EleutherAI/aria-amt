@@ -132,7 +132,7 @@ def optional_bf16_autocast(func):
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 return func(*args, **kwargs)
         else:
-            with torch.autocast("cuda", dtype=torch.float32):
+            with torch.autocast("cuda", dtype=torch.float16):
                 return func(*args, **kwargs)
 
     return wrapper
@@ -265,7 +265,11 @@ def gpu_manager(
     if gpu_id is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
 
-    model.decoder.setup_cache(batch_size=batch_size, max_seq_len=MAX_BLOCK_LEN)
+    model.decoder.setup_cache(
+        batch_size=batch_size,
+        max_seq_len=MAX_BLOCK_LEN,
+        dtype=torch.bfloat16 if is_bf16_supported() else torch.float16,
+    )
     model.cuda()
     model.eval()
     if compile is True:

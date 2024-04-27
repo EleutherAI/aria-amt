@@ -386,6 +386,7 @@ class TextDecoder(nn.Module):
         batch_size,
         max_seq_len=4096,
         max_audio_len=1500,
+        dtype=torch.bfloat16,
     ):
         self.causal_mask = torch.tril(
             torch.ones(max_seq_len, max_seq_len, dtype=torch.bool)
@@ -397,12 +398,14 @@ class TextDecoder(nn.Module):
                 max_seq_length=max_seq_len,
                 n_heads=8,
                 head_dim=64,
+                dtype=dtype,
             ).cuda()
             b.cross_attn.kv_cache = KVCache(
                 max_batch_size=batch_size,
                 max_seq_length=max_audio_len,
                 n_heads=8,
                 head_dim=64,
+                dtype=dtype,
             ).cuda()
 
 
