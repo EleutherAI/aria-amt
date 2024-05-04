@@ -12,9 +12,11 @@
     "audio": {
         "sample_rate": 16000,
         "n_fft": 2048,
+        "n_fft_reduced": 800,
         "hop_len": 160,
         "chunk_len": 30,
-        "n_mels": 256
+        "n_mels": 384,
+        "n_mels_reduced": 128
     },
     "data": {
         "stride_factor": 15,

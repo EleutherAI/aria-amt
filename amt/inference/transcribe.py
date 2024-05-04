@@ -218,6 +218,9 @@ def process_segments(
                     ),
                 )
 
+        logits[:, 389] *= 1.2
+        next_tok_ids = torch.argmax(logits, dim=-1)
+
         next_tok_ids = recalculate_tok_ids(
             logits=logits,
             tok_ids=next_tok_ids,
@@ -683,6 +686,7 @@ def batch_transcribe(
         model.decoder = quantize_int8(model.decoder)
 
     file_queue = Queue()
+    sorted(file_paths, key=lambda x: os.path.getsize(x), reverse=True)
     for file_path in file_paths:
         if (
             os.path.isfile(get_save_path(file_path, input_dir, save_dir))

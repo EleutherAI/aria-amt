@@ -82,6 +82,10 @@ class AudioTransform(torch.nn.Module):
         self.config = load_config()["audio"]
         self.sample_rate = self.config["sample_rate"]
         self.chunk_len = self.config["chunk_len"]
+        self.n_fft = self.config["n_fft"]
+        self.n_fft_reduced = self.config["n_fft_reduced"]
+        self.n_mels = self.config["n_mels"]
+        self.n_mels_reduced = self.config["n_mels_reduced"]
         self.num_samples = self.sample_rate * self.chunk_len
 
         self.noise_ratio = noise_ratio
@@ -95,7 +99,7 @@ class AudioTransform(torch.nn.Module):
         self.spec_aug_ratio = spec_aug_ratio
 
         self.time_mask_param = 2500
-        self.freq_mask_param = 15
+        self.freq_mask_param = 0
         self.reduction_resample_rate = 6000
 
         # Audio aug
@@ -126,13 +130,26 @@ class AudioTransform(torch.nn.Module):
             self.num_applause += 1
 
         self.spec_transform = torchaudio.transforms.Spectrogram(
-            n_fft=self.config["n_fft"],
+            n_fft=self.n_fft,
             hop_length=self.config["hop_len"],
         )
         self.mel_transform = torchaudio.transforms.MelScale(
-            n_mels=self.config["n_mels"],
-            sample_rate=self.config["sample_rate"],
-            n_stft=self.config["n_fft"] // 2 + 1,
+            n_mels=self.n_mels,
+            sample_rate=self.sample_rate,
+            n_stft=self.n_fft // 2 + 1,
+            f_min=30,
+            f_max=8000,
+        )
+        self.spec_transform_reduced = torchaudio.transforms.Spectrogram(
+            n_fft=self.n_fft_reduced,
+            hop_length=self.config["hop_len"],
+        )
+        self.mel_transform_reduced = torchaudio.transforms.MelScale(
+            n_mels=self.n_mels_reduced,
+            sample_rate=self.sample_rate,
+            n_stft=self.n_fft_reduced // 2 + 1,
+            f_min=30,
+            f_max=8000,
         )
         self.spec_aug = torch.nn.Sequential(
             torchaudio.transforms.TimeMasking(
@@ -315,16 +332,9 @@ class AudioTransform(torch.nn.Module):
 
         return shifted_specs
 
-    def detune_spec(self, specs: torch.Tensor):
-        if random.random() < self.detune_ratio:
-            detune_shift = random.uniform(
-                -self.detune_max_shift, self.detune_max_shift
-            )
-            detuned_specs = self.shift_spec(specs, shift=detune_shift)
-
-            return (specs + detuned_specs) / 2
-        else:
-            return specs
+    def detune_spec(self, specs: torch.Tensor, detune_shift: float):
+        detuned_specs = self.shift_spec(specs, shift=detune_shift)
+        return (specs + detuned_specs) / 2
 
     def aug_wav(self, wav: torch.Tensor):
         # This function doesn't apply distortion. If distortion is desired it
@@ -361,19 +371,30 @@ class AudioTransform(torch.nn.Module):
         self, wav: torch.Tensor, shift: int | None = None, detune: bool = False
     ):
         spec = self.spec_transform(wav)[..., :-1]
+        spec_reduced = self.spec_transform_reduced(wav)[..., :-1]
 
         if shift is not None and shift != 0:
             spec = self.shift_spec(spec, shift)
+            spec_reduced = self.shift_spec(spec_reduced, shift)
         elif detune is True:
             # Don't detune and spec shift at the same time
-            spec = self.detune_spec(spec)
+            if random.random() < self.detune_ratio:
+                detune_shift = random.uniform(
+                    -self.detune_max_shift, self.detune_max_shift
+                )
+                spec = self.detune_spec(spec, detune_shift=detune_shift)
+                spec_reduced = self.detune_spec(
+                    spec_reduced, detune_shift=detune_shift
+                )
 
         mel_spec = self.mel_transform(spec)
+        mel_spec_reduced = self.mel_transform_reduced(spec_reduced)
 
         # Norm
-        log_spec = self.norm_mel(mel_spec)
+        concat_mel = torch.cat((mel_spec, mel_spec_reduced), dim=1)
+        log_mel = self.norm_mel(concat_mel)
 
-        return log_spec
+        return log_mel
 
     def forward(self, wav: torch.Tensor, shift: int = 0):
         # Noise, and reverb
