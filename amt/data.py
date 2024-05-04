@@ -435,6 +435,8 @@ class AmtDataset(torch.utils.data.Dataset):
             print("The GNU cat command is not available")
         else:
             for _path in sharded_save_paths:
+                if os.path.isfile(_path) is False:
+                    continue
                 shell_cmd = f"cat {_path} >> {save_path}"
                 os.system(shell_cmd)
                 os.remove(_path)

@@ -20,16 +20,44 @@ logging.basicConfig(level=logging.INFO)
 if os.path.isdir("tests/test_results") is False:
     os.mkdir("tests/test_results")
 
-MAESTRO_PATH = "/mnt/ssd1/amt/training_data/maestro/train-s15.txt"
+MAESTRO_PATH = "/home/loubb/work/aria-amt/temp/train.txt"
 
 
-def plot_spec(mel: torch.Tensor, name: str | int):
-    plt.figure(figsize=(10, 4))
-    plt.imshow(mel, aspect="auto", origin="lower", cmap="viridis")
-    plt.colorbar(format="%+2.0f dB")
-    plt.title("(mel)-Spectrogram")
-    plt.tight_layout()
-    plt.savefig(f"tests/test_results/{name}.png")
+def plot_spec(
+    mel: torch.Tensor,
+    name: str | int,
+    onsets: list = [],
+    offsets: list = [],
+):
+    # mel tensor dimensions [height, width]
+
+    height, width = mel.shape
+    fig_width, fig_height = width // 100, height // 100
+    plt.figure(figsize=(fig_width, fig_height), dpi=100)
+    plt.imshow(
+        mel, aspect="auto", origin="lower", cmap="viridis", interpolation="none"
+    )
+
+    line_width_in_points = 1 / 100 * 72  # Convert pixel width to points
+
+    for x in onsets:
+        plt.axvline(
+            x=x,
+            color="red",
+            alpha=0.5,
+            linewidth=line_width_in_points,  # setting the correct line width
+        )
+    for x in offsets:
+        plt.axvline(
+            x=x,
+            color="purple",
+            alpha=0.5,
+            linewidth=line_width_in_points,  # setting the correct line width
+        )
+
+    plt.axis("off")
+    plt.tight_layout(pad=0)
+    plt.savefig(f"tests/test_results/{name}.png", dpi=100)
     plt.close()
 
 
@@ -184,7 +212,7 @@ class TestAug(unittest.TestCase):
 
         spec = audio_transform.spec_transform(wav)
         shift_spec = audio_transform.shift_spec(spec, 1)
-        shift_wav = griffin_lim(shift_spec)
+        shift_wav = griffin_lim(shift_spec[..., :384])
         torchaudio.save("tests/test_results/orig.wav", wav, SAMPLE_RATE)
         torchaudio.save("tests/test_results/shift.wav", shift_wav, SAMPLE_RATE)
 
@@ -232,28 +260,42 @@ class TestAug(unittest.TestCase):
         spec = audio_transform.spec_transform(wav)
         shift_spec = audio_transform.detune_spec(spec)
         shift_wav = griffin_lim(shift_spec)
-        gl_wav = griffin_lim(spec)
+        gl_wav = griffin_lim(spec[..., :384])
         torchaudio.save("tests/test_results/orig.wav", wav, SAMPLE_RATE)
         torchaudio.save("tests/test_results/orig_gl.wav", gl_wav, SAMPLE_RATE)
         torchaudio.save("tests/test_results/detune.wav", shift_wav, SAMPLE_RATE)
 
     def test_mels(self):
-        SAMPLE_RATE, CHUNK_LEN = 16000, 30
         audio_transform = AudioTransform()
+        SAMPLE_RATE, N_FFT, CHUNK_LEN = (
+            audio_transform.sample_rate,
+            audio_transform.n_fft,
+            30,
+        )
         wav, sr = torchaudio.load("tests/test_data/maestro.wav")
         wav = torchaudio.functional.resample(wav, sr, SAMPLE_RATE).mean(
             0, keepdim=True
         )[:, : SAMPLE_RATE * CHUNK_LEN]
-        wav_aug = audio_transform.aug_wav(
-            audio_transform.distortion_aug_cpu(wav)
-        )
-        torchaudio.save("tests/test_results/orig.wav", wav, SAMPLE_RATE)
-        torchaudio.save("tests/test_results/aug.wav", wav_aug, SAMPLE_RATE)
+
+        # tokenizer = AmtTokenizer()
+        # mid_dict = MidiDict.from_midi("tests/test_data/maestro-test.mid")
+        # seq = tokenizer._tokenize_midi_dict(mid_dict, 0, 30000, 10000)
+        # mid_dict = tokenizer._detokenize_midi_dict(seq, 30000)
+        # onsets = [msg["data"]["start"] // 10 for msg in mid_dict.note_msgs]
+        # offsets = [
+        #     msg["data"]["end"] // 10
+        #     for msg in mid_dict.note_msgs
+        #     if msg["data"]["end"] < 30000
+        # ]
 
         wavs = torch.stack((wav[0], wav[0], wav[0]))
         mels = audio_transform(wavs)
         for idx in range(mels.shape[0]):
-            plot_spec(mels[idx], idx)
+            plot_spec(
+                mels[idx],
+                f"{mels[0].shape[0]}-{N_FFT}-{SAMPLE_RATE}",
+            )
+            break
 
     def test_distortion(self):
         SAMPLE_RATE, CHUNK_LEN = 16000, 30
