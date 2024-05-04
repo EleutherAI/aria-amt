@@ -344,6 +344,8 @@ class TextDecoder(nn.Module):
         self, n_vocab: int, n_ctx: int, n_state: int, n_head: int, n_layer: int
     ):
         super().__init__()
+        self.n_head = n_head
+        self.n_state = n_state
         self.token_embedding = nn.Embedding(n_vocab, n_state)
         self.positional_embedding = nn.Parameter(torch.empty(n_ctx, n_state))
 
@@ -396,15 +398,15 @@ class TextDecoder(nn.Module):
             b.attn.kv_cache = KVCache(
                 max_batch_size=batch_size,
                 max_seq_length=max_seq_len,
-                n_heads=8,
-                head_dim=64,
+                n_heads=self.n_head,
+                head_dim=self.n_state // self.n_head,
                 dtype=dtype,
             ).cuda()
             b.cross_attn.kv_cache = KVCache(
                 max_batch_size=batch_size,
                 max_seq_length=max_audio_len,
-                n_heads=8,
-                head_dim=64,
+                n_heads=self.n_head,
+                head_dim=self.n_state // self.n_head,
                 dtype=dtype,
             ).cuda()
 
