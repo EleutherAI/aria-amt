@@ -11,12 +11,14 @@
     },
     "audio": {
         "sample_rate": 16000,
-        "n_fft": 2048,
-        "n_fft_reduced": 800,
+        "n_fft_large": 4096,
+        "n_fft_med": 2048,
+        "n_fft_small": 768,
         "hop_len": 160,
         "chunk_len": 30,
-        "n_mels": 384,
-        "n_mels_reduced": 128
+        "n_mels_large": 384,
+        "n_mels_med": 256,
+        "n_mels_small": 128
     },
     "data": {
         "stride_factor": 15,
