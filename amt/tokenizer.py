@@ -447,7 +447,7 @@ class AmtTokenizer(Tokenizer):
                         raise Exception
 
             random.shuffle(res)  # Only includes prev toks
-            res.append(self.bos_tok)  # Beggining of sequence
+            res.append(self.bos_tok)  # Beginning of sequence
 
             buffer = defaultdict(lambda: defaultdict(list))
             for tok_1, tok_2, tok_3 in zip(

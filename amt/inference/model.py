@@ -36,9 +36,14 @@ class KVCache(nn.Module):
         dtype=torch.bfloat16,
     ):
         super().__init__()
-        cache_shape = (max_batch_size, n_heads, max_seq_length, head_dim)
-        self.register_buffer("k_cache", torch.zeros(cache_shape, dtype=dtype))
-        self.register_buffer("v_cache", torch.zeros(cache_shape, dtype=dtype))
+        self.dtype = dtype
+        self.cache_shape = (max_batch_size, n_heads, max_seq_length, head_dim)
+        self.register_buffer(
+            "k_cache", torch.zeros(self.cache_shape, dtype=dtype)
+        )
+        self.register_buffer(
+            "v_cache", torch.zeros(self.cache_shape, dtype=dtype)
+        )
 
     def update(self, input_pos, k_val, v_val):
         # input_pos: [S], k_val, v_val: [B, H, L, D]
@@ -118,7 +123,7 @@ class EncoderAttention(nn.Module):
 class CrossAttention(nn.Module):
     def __init__(self, n_state: int, n_head: int):
         super().__init__()
-        assert n_state % n_head == 0, "n_head does not evenly devide n_state"
+        assert n_state % n_head == 0, "n_head does not evenly divide n_state"
 
         self.n_head = n_head
         self.d_head = n_state // n_head
