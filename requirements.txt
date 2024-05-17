@@ -3,6 +3,7 @@ torch >= 2.2
 torchaudio
 accelerate 
 psutil
+librosa
 mido
 tqdm
 orjson
