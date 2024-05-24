@@ -14,12 +14,8 @@ pip install -e .
 
 Download the preliminary model weights:
 
-Piano (not final)
-```
-wget https://storage.googleapis.com/aria-checkpoints/amt/guitar-temp.safetensors
-```
+Piano (v1)
 
-Classical guitar (not final)
 ```
 wget https://storage.googleapis.com/aria-checkpoints/amt/piano-temp.safetensors
 ```
@@ -36,7 +32,7 @@ You can then transcribe using the cli:
 
 ```
 aria-amt transcribe \
-    small-final \
+    medium-stacked \
     <path-to-checkpoint> \
     -load_path <path-to-audio> \
     -save_dir <path-to-save-dir> \

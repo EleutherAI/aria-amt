@@ -11,9 +11,9 @@
     },
     "audio": {
         "sample_rate": 16000,
-        "n_fft_large": 4096,
+        "n_fft_large": 2048,
         "n_fft_med": 2048,
-        "n_fft_small": 768,
+        "n_fft_small": 800,
         "hop_len": 160,
         "chunk_len": 30,
         "n_mels_large": 384,
