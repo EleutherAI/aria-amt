@@ -131,6 +131,9 @@ class AudioTransform(torch.nn.Module):
             self.register_buffer(f"applause_{i}", applause)
             self.num_applause += 1
 
+        # 256 - 0-8000 2048-256
+        # 512 - 30-8000 2048-384 30-8000 800-128
+        # 764 - 30-8000 4096-384 30-8000 2048-256 30-4000 768-128
         self.spec_transform_large = torchaudio.transforms.Spectrogram(
             n_fft=self.n_fft_large,
             hop_length=self.config["hop_len"],
@@ -416,8 +419,8 @@ class AudioTransform(torch.nn.Module):
 
         # Norm
         concat_mel = torch.cat(
-            (mel_spec_large, mel_spec_med, mel_spec_small),
-            # (mel_spec_large, mel_spec_small),
+            # (mel_spec_large, mel_spec_med, mel_spec_small),
+            (mel_spec_large, mel_spec_small),
             dim=1,
         )
         log_mel = self.norm_mel(concat_mel)

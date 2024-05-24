@@ -221,8 +221,8 @@ def process_segments(
                     ),
                 )
 
-        # logits[:, 389] *= 1.05
-        # next_tok_ids = torch.argmax(logits, dim=-1)
+        logits[:, 389] *= 1.05
+        next_tok_ids = torch.argmax(logits, dim=-1)
 
         next_tok_ids = recalculate_tok_ids(
             logits=logits,
@@ -544,7 +544,7 @@ def get_silent_intervals(wav: torch.Tensor):
         wav.numpy(),
         frame_length=FRAME_LEN,
         hop_length=HOP_LEN,
-        top_db=30,
+        top_db=45,
         ref=np.max,
     )
     non_silent = np.concatenate(([True], non_silent, [True]))
