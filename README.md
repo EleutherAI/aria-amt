@@ -14,12 +14,8 @@ pip install -e .
 
 Download the preliminary model weights:
 
-Piano (not final)
-```
-wget https://storage.googleapis.com/aria-checkpoints/amt/guitar-temp.safetensors
-```
+Piano (v1)
 
-Classical guitar (not final)
 ```
 wget https://storage.googleapis.com/aria-checkpoints/amt/piano-temp.safetensors
 ```
