@@ -21,6 +21,21 @@ def _add_maestro_args(subparser):
     )
 
 
+def _add_matched_args(subparser):
+    subparser.add_argument("audio", help="audio directory path")
+    subparser.add_argument("mid", help="midi directory path")
+    subparser.add_argument("csv", help="path to split.csv")
+    subparser.add_argument("-train", help="train save path", required=False)
+    subparser.add_argument("-val", help="val save path", required=False)
+    subparser.add_argument("-test", help="test save path", required=False)
+    subparser.add_argument(
+        "-mp",
+        help="number of processes to use",
+        type=int,
+        default=1,
+    )
+
+
 def _add_synth_args(subparser):
     subparser.add_argument("dir", help="Directory containing MIDIs")
     subparser.add_argument("csv", help="Split csv")
@@ -97,18 +112,18 @@ def get_synth_mid_paths(mid_dir: str, csv_path: str):
 def build_synth(
     mid_dir: str,
     csv_path: str,
-    train_file: str,
-    test_file: str,
+    train_path: str,
+    test_path: str,
     num_procs: int,
 ):
     from amt.data import AmtDataset, pianoteq_cmd_fn
 
-    if os.path.isfile(train_file):
-        print(f"Dataset file already exists at {train_file} - removing")
-        os.remove(train_file)
-    if os.path.isfile(test_file):
-        print(f"Dataset file already exists at {test_file} - removing")
-        os.remove(test_file)
+    if os.path.isfile(train_path):
+        print(f"Dataset file already exists at {train_path} - removing")
+        os.remove(train_path)
+    if os.path.isfile(test_path):
+        print(f"Dataset file already exists at {test_path} - removing")
+        os.remove(test_path)
 
     (
         train_paths,
@@ -117,23 +132,23 @@ def build_synth(
 
     print(f"Found {len(train_paths)} train and {len(test_paths)} test paths")
 
-    print(f"Building {train_file}")
+    print(f"Building {train_path}")
     AmtDataset.build(
         load_paths=train_paths,
-        save_path=train_file,
+        save_path=train_path,
         num_processes=num_procs,
         cli_cmd_fn=pianoteq_cmd_fn,
     )
-    print(f"Building {test_file}")
+    print(f"Building {test_path}")
     AmtDataset.build(
         load_paths=test_paths,
-        save_path=test_file,
+        save_path=test_path,
         num_processes=num_procs,
         cli_cmd_fn=pianoteq_cmd_fn,
     )
 
 
-def get_matched_maestro_paths(maestro_dir):
+def _get_matched_maestro_paths(maestro_dir):
     assert os.path.isdir(maestro_dir), "MAESTRO directory not found"
 
     maestro_csv_path = os.path.join(maestro_dir, "maestro-v3.0.0.csv")
@@ -152,7 +167,7 @@ def get_matched_maestro_paths(maestro_dir):
                 os.path.join(maestro_dir, entry["midi_filename"])
             )
 
-            if not os.path.isfile(audio_path) or not os.path.isfile(audio_path):
+            if not os.path.isfile(audio_path) or not os.path.isfile(midi_path):
                 print("File missing - skipping")
                 print(audio_path)
                 print(midi_path)
@@ -170,46 +185,151 @@ def get_matched_maestro_paths(maestro_dir):
     return matched_paths_train, matched_paths_val, matched_paths_test
 
 
-def build_maestro(maestro_dir, train_file, val_file, test_file, num_procs):
+def _get_matched_paths(audio_dir: str, mid_dir: str, split_csv_path: str):
+    assert os.path.isdir(audio_dir), "audio dir not found"
+    assert os.path.isdir(mid_dir), "mid dir not found"
+    assert os.path.isfile(split_csv_path), "split csv not found"
+
+    matched_paths_train = []
+    matched_paths_val = []
+    matched_paths_test = []
+    with open(split_csv_path, "r") as f:
+        dict_reader = DictReader(f)
+        for entry in dict_reader:
+            audio_path = os.path.normpath(
+                os.path.join(audio_dir, entry["audio_path"])
+            )
+            mid_path = os.path.normpath(
+                os.path.join(mid_dir, entry["mid_path"])
+            )
+
+            if not os.path.isfile(audio_path) or not os.path.isfile(mid_path):
+                raise FileNotFoundError(
+                    f"File pair missing: {(audio_path, mid_path)}"
+                )
+
+            if entry["split"] == "train":
+                matched_paths_train.append((audio_path, mid_path))
+            elif entry["split"] == "val":
+                matched_paths_val.append((audio_path, mid_path))
+            elif entry["split"] == "test":
+                matched_paths_test.append((audio_path, mid_path))
+            else:
+                raise ValueError("Invalid split")
+
+    return matched_paths_train, matched_paths_val, matched_paths_test
+
+
+def _build_from_matched_paths(
+    matched_paths_train: list,
+    matched_paths_val: list,
+    matched_paths_test: list,
+    train_path: str | None = None,
+    val_path: str | None = None,
+    test_path: str | None = None,
+    num_procs: int = 1,
+):
     from amt.data import AmtDataset
 
-    if os.path.isfile(train_file):
-        print(f"Dataset file already exists at {train_file} - removing")
-        os.remove(train_file)
-    if os.path.isfile(val_file):
-        print(f"Dataset file already exists at {val_file} - removing")
-        os.remove(val_file)
-    if os.path.isfile(test_file):
-        print(f"Dataset file already exists at {test_file} - removing")
-        os.remove(test_file)
+    if train_path is None:
+        pass
+    elif len(matched_paths_train) >= 1:
+        if os.path.isfile(train_path):
+            input(
+                f"Dataset file already exists at {train_path} - Press enter to continue (^C to quit)"
+            )
+            os.remove(train_path)
+        print(f"Building {train_path}")
+        AmtDataset.build(
+            load_paths=matched_paths_train,
+            save_path=train_path,
+            num_processes=num_procs,
+        )
+    if val_path is None:
+        pass
+    elif len(matched_paths_val) >= 1:
+        if os.path.isfile(val_path):
+            input(
+                f"Dataset file already exists at {val_path} - Press enter to continue (^C to quit)"
+            )
+            os.remove(val_path)
+        print(f"Building {val_path}")
+        AmtDataset.build(
+            load_paths=matched_paths_val,
+            save_path=val_path,
+            num_processes=num_procs,
+        )
+    if test_path is None:
+        pass
+    elif len(matched_paths_test) >= 1 and test_path:
+        if os.path.isfile(test_path):
+            input(
+                f"Dataset file already exists at {test_path} - Press enter to continue (^C to quit)"
+            )
+            os.remove(test_path)
+        print(f"Building {test_path}")
+        AmtDataset.build(
+            load_paths=matched_paths_test,
+            save_path=test_path,
+            num_processes=num_procs,
+        )
 
+
+def build_from_csv(
+    audio_dir: str,
+    mid_dir: str,
+    split_csv_path: str,
+    train_path: str,
+    val_path: str,
+    test_path: str,
+    num_procs: int,
+):
     (
         matched_paths_train,
         matched_paths_val,
         matched_paths_test,
-    ) = get_matched_maestro_paths(maestro_dir)
+    ) = _get_matched_paths(
+        audio_dir=audio_dir,
+        mid_dir=mid_dir,
+        split_csv_path=split_csv_path,
+    )
 
     print(
         f"Found {len(matched_paths_train)}, {len(matched_paths_val)}, {len(matched_paths_test)} train, val, and test paths"
     )
 
-    print(f"Building {train_file}")
-    AmtDataset.build(
-        load_paths=matched_paths_train,
-        save_path=train_file,
-        num_processes=num_procs,
+    _build_from_matched_paths(
+        matched_paths_train=matched_paths_train,
+        matched_paths_val=matched_paths_val,
+        matched_paths_test=matched_paths_test,
+        train_path=train_path,
+        val_path=val_path,
+        test_path=test_path,
+        num_procs=num_procs,
     )
-    print(f"Building {val_file}")
-    AmtDataset.build(
-        load_paths=matched_paths_val,
-        save_path=val_file,
-        num_processes=num_procs,
-    )
-    print(f"Building {test_file}")
-    AmtDataset.build(
-        load_paths=matched_paths_test,
-        save_path=test_file,
-        num_processes=num_procs,
+
+
+def build_maestro(
+    maestro_dir: str,
+    train_path: str,
+    val_path: str,
+    test_path: str,
+    num_procs: int,
+):
+    (
+        matched_paths_train,
+        matched_paths_val,
+        matched_paths_test,
+    ) = _get_matched_maestro_paths(maestro_dir=maestro_dir)
+
+    _build_from_matched_paths(
+        matched_paths_train=matched_paths_train,
+        matched_paths_val=matched_paths_val,
+        matched_paths_test=matched_paths_test,
+        train_path=train_path,
+        val_path=val_path,
+        test_path=test_path,
+        num_procs=num_procs,
     )
 
 
@@ -298,11 +418,12 @@ def transcribe(
         file_paths = found_mp3 + found_wav
     elif trans_mode == "maestro":
         matched_train_paths, matched_val_paths, matched_test_paths = (
-            get_matched_maestro_paths(load_dir)
+            _get_matched_maestro_paths(load_dir)
         )
+        train_mp3_paths = [ap for ap, mp in matched_train_paths]
         val_mp3_paths = [ap for ap, mp in matched_val_paths]
         test_mp3_paths = [ap for ap, mp in matched_test_paths]
-        file_paths = test_mp3_paths  # val_mp3_paths + test_mp3_paths
+        file_paths = test_mp3_paths
         assert len(file_paths) == 177, "Invalid maestro files"
     else:
         file_paths = [load_path]
@@ -340,17 +461,20 @@ def main():
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(help="sub-command help", dest="command")
 
-    # add maestro and transcribe subparsers
     subparser_maestro = subparsers.add_parser(
-        "maestro", help="Commands to build the maestro dataset."
+        "build-maestro", help="Commands to build the maestro dataset."
+    )
+    subparser_matched = subparsers.add_parser(
+        "build-matched", help="Commands to build dataset from matched paths."
     )
     subparser_synth = subparsers.add_parser(
-        "synth", help="Commands to build the maestro dataset."
+        "build-synth", help="Commands to build the synthetic dataset."
     )
     subparser_transcribe = subparsers.add_parser(
         "transcribe", help="Commands to run transcription."
     )
     _add_maestro_args(subparser_maestro)
+    _add_matched_args(subparser_matched)
     _add_synth_args(subparser_synth)
     _add_transcribe_args(subparser_transcribe)
 
@@ -360,20 +484,30 @@ def main():
         parser.print_help()
         print("Unrecognized command")
         exit(1)
-    elif args.command == "maestro":
+    elif args.command == "build-maestro":
         build_maestro(
             maestro_dir=args.dir,
-            train_file=args.train,
-            val_file=args.val,
-            test_file=args.test,
+            train_path=args.train,
+            val_path=args.val,
+            test_path=args.test,
             num_procs=args.mp,
         )
-    elif args.command == "synth":
+    elif args.command == "build-matched":
+        build_from_csv(
+            audio_dir=args.audio,
+            mid_dir=args.mid,
+            split_csv_path=args.csv,
+            train_path=args.train,
+            val_path=args.val,
+            test_path=args.test,
+            num_procs=args.mp,
+        )
+    elif args.command == "build-synth":
         build_synth(
             mid_dir=args.dir,
             csv_path=args.csv,
-            train_file=args.train,
-            test_file=args.test,
+            train_path=args.train,
+            test_path=args.test,
             num_procs=args.mp,
         )
     elif args.command == "transcribe":

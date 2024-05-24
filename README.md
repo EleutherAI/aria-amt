@@ -32,7 +32,7 @@ You can then transcribe using the cli:
 
 ```
 aria-amt transcribe \
-    small-final \
+    medium-stacked \
     <path-to-checkpoint> \
     -load_path <path-to-audio> \
     -save_dir <path-to-save-dir> \
