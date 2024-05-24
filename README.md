@@ -17,7 +17,7 @@ Download the preliminary model weights:
 Piano (v1)
 
 ```
-wget https://storage.googleapis.com/aria-checkpoints/amt/piano-temp.safetensors
+wget https://storage.googleapis.com/aria-checkpoints/amt/piano-medium-stacked-1.0.safetensors
 ```
 
 ## Usage
