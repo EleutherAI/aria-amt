@@ -615,17 +615,17 @@ def transcribe_file(
                 f"Seen silent intervals in segment {idx}: {silent_intervals}"
             )
 
-        seq_raw = seq
-        seq = process_silent_intervals(
+        seq_adj = process_silent_intervals(
             seq, intervals=silent_intervals, tokenizer=tokenizer
         )
 
-        if len(seq) != len(seq_raw):
+        if len(seq_adj) < len(seq) - 3:
             logger.info(
-                f"Removed tokens ({len(seq_raw)} -> {len(seq)}) "
+                f"Removed tokens ({len(seq)} -> {len(seq_adj)}) "
                 f"in segment {idx} according to silence in intervals: "
                 f"{silent_intervals}",
             )
+            seq = seq_adj
 
         try:
             next_seq = _truncate_seq(
