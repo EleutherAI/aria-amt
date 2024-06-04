@@ -135,7 +135,8 @@ def optional_bf16_autocast(func):
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 return func(*args, **kwargs)
         else:
-            with torch.autocast("cuda", dtype=torch.float16):
+            # TODO: We are using float instead of float16 due to strange bug
+            with torch.autocast("cuda", dtype=torch.float):
                 return func(*args, **kwargs)
 
     return wrapper
@@ -220,6 +221,7 @@ def process_segments(
                         [], device=seq.device, dtype=torch.int
                     ),
                 )
+        assert not torch.isnan(logits).any(), "NaN seen in logits"
 
         logits[:, 389] *= 1.05
         next_tok_ids = torch.argmax(logits, dim=-1)
@@ -274,7 +276,7 @@ def gpu_manager(
     model.decoder.setup_cache(
         batch_size=batch_size,
         max_seq_len=MAX_BLOCK_LEN,
-        dtype=torch.bfloat16 if is_bf16_supported() else torch.float16,
+        dtype=torch.bfloat16 if is_bf16_supported() else torch.float,
     )
     model.cuda()
     model.eval()
