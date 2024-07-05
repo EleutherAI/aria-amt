@@ -110,7 +110,9 @@ def load_and_run_dtw(args):
 def get_matched_files(audio_dir: str, mid_dir: str):
     # We assume that the files have the same path relative to their directory
     res = []
-    wav_paths = glob.glob(os.path.join(audio_dir, "**/*.mp3"), recursive=True)
+    wav_paths = glob.glob(
+        os.path.join(audio_dir, "**/*.mp[34]"), recursive=True
+    )
     print(f"found {len(wav_paths)} mp3 files")
 
     for wav_path in wav_paths:
