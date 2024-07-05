@@ -161,6 +161,26 @@ def decode_token(
     return logits, next_tok_ids
 
 
+@torch.no_grad()
+def prefill(
+    model: AmtEncoderDecoder,
+    x: torch.Tensor,
+    xa: torch.Tensor,
+    x_input_pos: torch.Tensor,
+    xa_input_pos: torch.Tensor,
+):
+    # This is the same as decode_token, however we don't compile the prefill
+    logits = model.decoder.forward(
+        x=x,
+        xa=xa,
+        x_input_pos=x_input_pos,
+        xa_input_pos=xa_input_pos,
+    )[:, -1]
+    next_tok_ids = torch.argmax(logits, dim=-1)
+
+    return logits, next_tok_ids
+
+
 @optional_bf16_autocast
 @torch.no_grad()
 def process_segments(
@@ -196,9 +216,7 @@ def process_segments(
         )
     ):
         # for idx in range(min_prefix_len, MAX_BLOCK_LEN - 1):
-        with torch.backends.cuda.sdp_kernel(
-            enable_flash=False, enable_mem_efficient=False, enable_math=True
-        ):
+        with torch.nn.attention.sdpa_kernel(torch.nn.attention.SDPBackend.MATH):
             if idx == min_prefix_len:
                 logits, next_tok_ids = decode_token(
                     model,
@@ -442,7 +460,7 @@ def _truncate_seq(
         return res
 
 
-# This is a sloppy implementation
+# TODO: Add detection for pedal messages which occur before notes are played
 def process_silent_intervals(
     seq: list, intervals: list, tokenizer: AmtTokenizer
 ):
@@ -621,7 +639,7 @@ def transcribe_file(
             seq, intervals=silent_intervals, tokenizer=tokenizer
         )
 
-        if len(seq_adj) < len(seq) - 3:
+        if len(seq_adj) < len(seq) - 5:
             logger.info(
                 f"Removed tokens ({len(seq)} -> {len(seq_adj)}) "
                 f"in segment {idx} according to silence in intervals: "
@@ -718,7 +736,8 @@ def process_file(
 
         try:
             mid_dict = tokenizer._detokenize_midi_dict(
-                tokenized_seq=_seq, len_ms=last_onset
+                tokenized_seq=_seq,
+                len_ms=last_onset,
             )
             mid = mid_dict.to_midi()
             mid.save(_save_path)
@@ -778,6 +797,8 @@ def watchdog(main_gpu_pid: int, child_pids: list):
                     os.kill(pid, signal.SIGTERM)
                 except ProcessLookupError:
                     pass
+
+            return
 
         time.sleep(1)
 

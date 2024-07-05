@@ -6,6 +6,13 @@ import glob
 
 from csv import DictReader
 
+# V2 ideas:
+# - When we retrain, perhaps provide many examples of non piano-audio, matched with a
+#   special token which denotes a non-piano audio segment.
+# - We could additionally occasionally splice a piano segment with non piano audio
+#   and task the model with detecting this using the tokenizer.
+# - Retrain with much larger synth dataset
+
 
 # TODO: Implement a way of inferring the tokenizer name automatically
 def _add_maestro_args(subparser):
@@ -412,7 +419,7 @@ def transcribe(
             os.path.join(load_dir, "**/*.wav"), recursive=True
         )
         found_mp3 = glob.glob(
-            os.path.join(load_dir, "**/*.mp3"), recursive=True
+            os.path.join(load_dir, "**/*.mp[34]"), recursive=True
         )
         print(f"Found {len(found_mp3)} mp3 and {len(found_wav)} wav files")
         file_paths = found_mp3 + found_wav
