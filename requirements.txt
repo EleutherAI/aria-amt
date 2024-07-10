@@ -1,5 +1,5 @@
 aria @ git+https://github.com/EleutherAI/aria.git
-torch >= 2.2
+torch >= 2.3
 torchaudio
 accelerate 
 psutil

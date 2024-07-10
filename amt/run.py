@@ -89,6 +89,12 @@ def _add_transcribe_args(subparser):
         action="store_true",
         default=False,
     )
+    subparser.add_argument(
+        "-max_autotune",
+        help="use mode=max_autotune when compiling",
+        action="store_true",
+        default=False,
+    )
     subparser.add_argument("-bs", help="batch size", type=int, default=16)
 
 
@@ -341,16 +347,16 @@ def build_maestro(
 
 
 def transcribe(
-    model_name,
-    checkpoint_path,
-    save_dir,
-    load_path=None,
-    load_dir=None,
-    maestro=False,
-    batch_size=16,
-    multi_gpu=False,
-    quantize=False,
-    compile=False,
+    model_name: str,
+    checkpoint_path: str,
+    save_dir: str,
+    load_path: str | None = None,
+    load_dir: str | None = None,
+    maestro: bool = False,
+    batch_size: int = 8,
+    multi_gpu: bool = False,
+    quantize: bool = False,
+    compile_mode: str | bool = False,
 ):
     """
     Transcribe audio files to midi using the given model and checkpoint.
@@ -449,7 +455,7 @@ def transcribe(
             input_dir=load_dir,
             gpu_ids=gpu_ids,
             quantize=quantize,
-            compile=compile,
+            compile_mode=compile_mode,
         )
 
     else:
@@ -460,7 +466,7 @@ def transcribe(
             batch_size=batch_size,
             input_dir=load_dir,
             quantize=quantize,
-            compile=compile,
+            compile_mode=compile_mode,
         )
 
 
@@ -528,7 +534,11 @@ def main():
             batch_size=args.bs,
             multi_gpu=args.multi_gpu,
             quantize=args.q8,
-            compile=args.compile,
+            compile_mode=(
+                "max-autotune"
+                if args.compile and args.max_autotune
+                else "reduce-overhead" if args.compile else False
+            ),
         )
     else:
         print("Unrecognized command")
