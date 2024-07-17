@@ -14,6 +14,7 @@ import numpy as np
 import concurrent
 
 from multiprocessing import Queue, Manager
+from multiprocessing.synchronize import Lock as LockType
 from queue import Empty
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
@@ -281,7 +282,8 @@ def process_segments(
 
 def gpu_manager(
     gpu_batch_queue: Queue,
-    gpu_waiting_list: dict,
+    gpu_waiting_dict: dict,
+    gpu_waiting_dict_lock: LockType,
     result_queue: Queue,
     model: AmtEncoderDecoder,
     batch_size: int,
@@ -320,11 +322,14 @@ def gpu_manager(
     try:
         while True:
             try:
-                gpu_waiting_list[gpu_id] = time.time()
+                with gpu_waiting_dict_lock:
+                    gpu_waiting_dict[gpu_id] = time.time()
                 batch = gpu_batch_queue.get(timeout=60)
-                gpu_waiting_list.pop(gpu_id, None)
+                with gpu_waiting_dict_lock:
+                    del gpu_waiting_dict[gpu_id]
             except Empty as e:
-                gpu_waiting_list.pop(gpu_id, None)
+                with gpu_waiting_dict_lock:
+                    del gpu_waiting_dict[gpu_id]
                 raise e
             else:
                 try:
@@ -349,7 +354,7 @@ def gpu_manager(
     except Exception as e:
         logger.error(f"GPU manager failed with exception: {e}")
     finally:
-        gpu_waiting_list.pop(gpu_id, None)
+        del gpu_waiting_dict[gpu_id]
         logger.info(f"GPU manager terminated")
 
 
@@ -379,12 +384,19 @@ def _find_min_diff_batch(tasks: List, batch_size: int):
     ]
 
 
+# NOTE:
+# - For some reason copying gpu_waiting_dict is not working properly and is
+#   leading to race conditions. I've implemented a lock to stop it.
+# - The size of gpu_batch_queue decreases before the code for deleting the
+#   corresponding entry in gpu_waiting_dict get processed. Adding a short sleep
+#   is a workaround
 def gpu_batch_manager(
     gpu_task_queue: Queue,
     gpu_batch_queue: Queue,
-    gpu_waiting_list: dict,
+    gpu_waiting_dict: dict,
+    gpu_waiting_dict_lock: LockType,
     batch_size: int,
-    max_wait_time: float = 0.1,
+    max_wait_time: float = 0.25,
     min_batch_size: int = 1,
 ):
     logger = _setup_logger(name="B")
@@ -402,27 +414,29 @@ def gpu_batch_manager(
             except Empty:
                 pass
 
-            curr_time = time.time()
-            num_gpus_waiting = len(gpu_waiting_list)
-            gpu_wait_time = (
-                max(
-                    [
-                        curr_time - wait_time_abs
-                        for gpu_id, wait_time_abs in gpu_waiting_list.items()
-                    ]
+            with gpu_waiting_dict_lock:
+                curr_time = time.time()
+                num_tasks_in_batch_queue = gpu_batch_queue.qsize()
+                num_gpus_waiting = len(gpu_waiting_dict)
+                gpu_wait_time = (
+                    max(
+                        [
+                            curr_time - wait_time_abs
+                            for gpu_id, wait_time_abs in gpu_waiting_dict.items()
+                        ]
+                    )
+                    if gpu_waiting_dict
+                    else 0.0
                 )
-                if gpu_waiting_list
-                else 0.0
-            )
 
             should_create_batch = (
                 len(tasks) >= 4 * batch_size
                 or (
-                    num_gpus_waiting > gpu_batch_queue.qsize()
+                    num_gpus_waiting > num_tasks_in_batch_queue
                     and len(tasks) >= batch_size
                 )
                 or (
-                    num_gpus_waiting > 0
+                    num_gpus_waiting > num_tasks_in_batch_queue
                     and len(tasks) >= min_batch_size
                     and gpu_wait_time > max_wait_time
                 )
@@ -430,18 +444,15 @@ def gpu_batch_manager(
 
             if should_create_batch:
                 logger.debug(
-                    f"Batch created: "
+                    f"Creating batch: "
                     f"num_gpus_waiting={num_gpus_waiting}, "
                     f"gpu_wait_time={round(gpu_wait_time, 4)}s, "
                     f"num_tasks_ready={len(tasks)}, "
-                    f"num_batches_ready={gpu_batch_queue.qsize()}"
+                    f"num_batches_ready={num_tasks_in_batch_queue}"
                 )
                 batch = create_batch(tasks, batch_size, min_batch_size, logger)
                 gpu_batch_queue.put(batch)
-            elif gpu_task_queue.empty():
-                time.sleep(0.05)
-            else:
-                time.sleep(0.01)
+                time.sleep(0.025)
 
     except Exception as e:
         logger.error(f"GPU batch manager failed with exception: {e}")
@@ -462,16 +473,14 @@ def create_batch(
         batch_idxs = list(range(len(tasks)))
         batch = [tasks.popleft() for _ in batch_idxs]
 
-        while len(batch) < min_batch_size:
+        while len(batch) < batch_size:
             pad_task, _ = batch[0]
             batch.append((pad_task, -1))
     else:
         batch_idxs = _find_min_diff_batch(list(tasks), batch_size)
         batch = [tasks[idx] for idx in batch_idxs]
-
-    # Remove the selected tasks from the deque
-    for idx in sorted(batch_idxs, reverse=True):
-        del tasks[idx]
+        for idx in sorted(batch_idxs, reverse=True):
+            del tasks[idx]
 
     return batch
 
@@ -853,6 +862,7 @@ def watchdog(main_pids: List, child_pids: List):
                 except ProcessLookupError:
                     pass
 
+            print("Finished cleaning up children")
             return
 
         time.sleep(1)
@@ -957,9 +967,10 @@ def batch_transcribe(
     num_processes_per_worker = min(5, file_queue.qsize() // num_workers)
 
     mp_manager = Manager()
-    gpu_waiting_list = mp_manager.dict()
-    gpu_task_queue = Queue()
+    gpu_waiting_dict = mp_manager.dict()
+    gpu_waiting_dict_lock = mp_manager.Lock()
     gpu_batch_queue = Queue()
+    gpu_task_queue = Queue()
     result_queue = Queue()
 
     child_pids = []
@@ -987,7 +998,13 @@ def batch_transcribe(
 
     gpu_batch_manager_process = multiprocessing.Process(
         target=gpu_batch_manager,
-        args=(gpu_task_queue, gpu_batch_queue, gpu_waiting_list, batch_size),
+        args=(
+            gpu_task_queue,
+            gpu_batch_queue,
+            gpu_waiting_dict,
+            gpu_waiting_dict_lock,
+            batch_size,
+        ),
     )
     gpu_batch_manager_process.start()
     child_pids.append(gpu_batch_manager_process.pid)
@@ -999,7 +1016,8 @@ def batch_transcribe(
                 target=gpu_manager,
                 args=(
                     gpu_batch_queue,
-                    gpu_waiting_list,
+                    gpu_waiting_dict,
+                    gpu_waiting_dict_lock,
                     result_queue,
                     model,
                     batch_size,
@@ -1030,7 +1048,8 @@ def batch_transcribe(
             target=gpu_manager,
             args=(
                 gpu_batch_queue,
-                gpu_waiting_list,
+                gpu_waiting_dict,
+                gpu_waiting_dict_lock,
                 result_queue,
                 model,
                 batch_size,
