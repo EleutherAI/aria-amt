@@ -95,6 +95,11 @@ def _add_transcribe_args(subparser):
         action="store_true",
         default=False,
     )
+    subparser.add_argument(
+        "-num_workers",
+        help="numer of file worker processes",
+        type=int,
+    )
     subparser.add_argument("-bs", help="batch size", type=int, default=16)
 
 
@@ -355,6 +360,7 @@ def transcribe(
     maestro: bool = False,
     batch_size: int = 8,
     multi_gpu: bool = False,
+    num_workers: int | None = None,
     quantize: bool = False,
     compile_mode: str | bool = False,
 ):
@@ -454,6 +460,7 @@ def transcribe(
             batch_size=batch_size,
             input_dir=load_dir,
             gpu_ids=gpu_ids,
+            num_workers=num_workers,
             quantize=quantize,
             compile_mode=compile_mode,
         )
@@ -465,6 +472,7 @@ def transcribe(
             save_dir=save_dir,
             batch_size=batch_size,
             input_dir=load_dir,
+            num_workers=num_workers,
             quantize=quantize,
             compile_mode=compile_mode,
         )
@@ -534,6 +542,7 @@ def main():
             batch_size=args.bs,
             multi_gpu=args.multi_gpu,
             quantize=args.q8,
+            num_workers=args.num_workers,
             compile_mode=(
                 "max-autotune"
                 if args.compile and args.max_autotune

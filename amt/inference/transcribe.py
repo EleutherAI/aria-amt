@@ -827,7 +827,7 @@ def process_file(
 
         return num_removed
 
-    pid = int(str(os.getpid()) + str(threading.get_ident()))
+    pid = threading.get_ident()
     try:
         seqs = transcribe_file(file_path, gpu_task_queue, result_queue, pid=pid)
     except Exception as e:
@@ -926,6 +926,7 @@ def batch_transcribe(
     batch_size: int = 8,
     input_dir: str | None = None,
     gpu_ids: int | None = None,
+    num_workers: int | None = None,
     quantize: bool = False,
     compile_mode: str | bool = False,
 ):
@@ -936,7 +937,7 @@ def batch_transcribe(
         False,
     }, "Invalid value for compile_mode"
 
-    torch.multiprocessing.set_start_method("forkserver")
+    torch.multiprocessing.set_start_method("spawn")
     num_gpus = len(gpu_ids) if gpu_ids is not None else 1
     logger = _setup_logger()
 
@@ -960,10 +961,11 @@ def batch_transcribe(
 
     logger.info(f"Files to process: {file_queue.qsize()}/{len(file_paths)}")
 
-    num_workers = min(
-        min(batch_size * num_gpus, multiprocessing.cpu_count() - num_gpus),
-        file_queue.qsize(),
-    )
+    if num_workers is None:
+        num_workers = min(
+            min(batch_size * num_gpus, multiprocessing.cpu_count() - num_gpus),
+            file_queue.qsize(),
+        )
     num_processes_per_worker = min(5, file_queue.qsize() // num_workers)
 
     mp_manager = Manager()
