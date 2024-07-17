@@ -343,11 +343,10 @@ class AmtTokenizer(Tokenizer):
                     # Process note and add to note msgs
                     note_to_close = notes_to_close.pop(tok_1_data, None)
                     if note_to_close is None:
-                        print(
-                            f"No 'on' token corresponding to 'off' token: {tok_1, tok_2}"
-                        )
                         if DEBUG:
-                            raise Exception
+                            print(
+                                f"No 'on' token corresponding to 'off' token: {tok_1, tok_2}"
+                            )
                         continue
                     else:
                         _pitch = tok_1_data
