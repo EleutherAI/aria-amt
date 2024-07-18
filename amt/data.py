@@ -1,12 +1,14 @@
 import mmap
 import os
 import io
+import math
 import random
 import shlex
 import base64
 import shutil
 import orjson
 import torch
+import torch.nn.functional as F
 import torchaudio
 
 from multiprocessing import Pool, Queue, Process
@@ -15,7 +17,6 @@ from typing import Callable
 from aria.data.midi import MidiDict
 from amt.tokenizer import AmtTokenizer
 from amt.config import load_config
-from amt.audio import pad_or_trim
 
 
 def _check_onset_threshold(seq: list, onset: int):
@@ -28,80 +29,124 @@ def _check_onset_threshold(seq: list, onset: int):
     return False
 
 
-def get_wav_mid_segments(
-    audio_path: str,
-    mid_path: str = "",
-    return_json: bool = False,
+# TODO: Test the re-implementation of this  again
+def get_mid_segments(
+    mid_path: str,
     stride_factor: int | None = None,
     pad_last=False,
 ):
-    """This function yields tuples of matched log mel spectrograms and
-    tokenized sequences (np.array, list). If it is given only an audio path
-    then it will return an empty list for the mid_feature
-    """
+    assert os.path.isfile(mid_path), "MIDI file not found"
     tokenizer = AmtTokenizer()
+    config = load_config()
+    chunk_len_ms = int(config["audio"]["chunk_len"] * 1e3)
+    if not stride_factor:
+        stride_factor = config["data"]["stride_factor"]
+    stride_len_ms = int(chunk_len_ms // stride_factor)
+
+    midi_dict = MidiDict.from_midi(mid_path)
+    last_note_msg_ms = midi_dict.tick_to_ms(
+        midi_dict.note_msgs[-1]["data"]["end"]
+    )
+
+    start_ms = 0
+    while start_ms < last_note_msg_ms:
+        mid_feature = tokenizer._tokenize_midi_dict(
+            midi_dict=midi_dict,
+            start_ms=start_ms,
+            end_ms=start_ms + chunk_len_ms,
+            max_pedal_len_ms=15000,
+        )
+        if _check_onset_threshold(mid_feature, 5000) is True:
+            yield mid_feature
+        else:
+            print("No note messages after 5s - skipping")
+            yield None
+
+        start_ms += stride_len_ms
+
+
+def get_wav_segments(
+    audio_path: str,
+    stride_factor: int | None = None,
+    pad_last=False,
+):
+    assert os.path.isfile(audio_path), "Audio file not found"
     config = load_config()
     sample_rate = config["audio"]["sample_rate"]
     chunk_len = config["audio"]["chunk_len"]
-    num_samples = sample_rate * chunk_len
-    samples_per_ms = sample_rate // 1000
 
     if not stride_factor:
         stride_factor = config["data"]["stride_factor"]
 
-    if not os.path.isfile(audio_path):
-        return None
+    stream = torchaudio.io.StreamReader(audio_path)
+    chunk_samples = int(sample_rate * chunk_len)
+    stride_samples = int(chunk_samples // stride_factor)
+    assert chunk_samples % stride_samples == 0, "Invalid stride"
 
-    # Load midi if required
-    if mid_path == "":
-        midi_dict = None
-    elif not os.path.isfile(mid_path):
-        return None
-    else:
-        midi_dict = MidiDict.from_midi(mid_path)
+    stream.add_basic_audio_stream(
+        frames_per_chunk=stride_samples,
+        stream_index=0,
+        sample_rate=sample_rate,
+    )
 
-    # Load audio
-    wav, sr = torchaudio.load(audio_path)
-    if sr != sample_rate:
-        wav = torchaudio.functional.resample(
-            waveform=wav,
-            orig_freq=sr,
-            new_freq=sample_rate,
-        ).mean(0)
+    buffer = torch.tensor([], dtype=torch.float32)
+    for stride_seg in stream.stream():
+        seg_chunk = stride_seg[0].mean(1)
 
-    # Create features
-    total_samples = wav.shape[-1]
-    pad_factor = 2 if pad_last is True else 1
-    res = []
-    for idx in range(
-        0,
-        total_samples
-        - (num_samples - pad_factor * (num_samples // stride_factor)),
-        num_samples // stride_factor,
-    ):
-        audio_feature = pad_or_trim(wav[idx:], length=num_samples)
-        if midi_dict is not None:
-            mid_feature = tokenizer._tokenize_midi_dict(
-                midi_dict=midi_dict,
-                start_ms=idx // samples_per_ms,
-                end_ms=(idx + num_samples) / samples_per_ms,
-                max_pedal_len_ms=15000,
+        # Pad seg_chunk if required
+        if seg_chunk.shape[0] < stride_samples:
+            seg_chunk = F.pad(
+                seg_chunk,
+                (0, stride_samples - seg_chunk.shape[0]),
+                mode="constant",
+                value=0.0,
             )
 
-            # Hardcoded to 5s
-            if _check_onset_threshold(mid_feature, 5000) is False:
-                print("No note messages after 5s - skipping")
-                continue
-
+        if buffer.shape[0] < chunk_samples:
+            buffer = torch.cat((buffer, seg_chunk), dim=0)
         else:
-            mid_feature = []
+            buffer = torch.cat((buffer[stride_samples:], seg_chunk), dim=0)
 
-        if return_json is True:
-            audio_feature = audio_feature.tolist()
+        if buffer.shape[0] == chunk_samples:
+            yield buffer
 
-        res.append((audio_feature, mid_feature))
+    if pad_last == True:
+        yield torch.cat(
+            (
+                buffer[stride_samples:],
+                torch.zeros(stride_samples, dtype=torch.float32),
+            ),
+            dim=0,
+        )
 
-    return res
+
+def get_paired_wav_mid_segments(
+    audio_path: str,
+    mid_path: str,
+    stride_factor: int | None = None,
+    pad_last=False,
+):
+    tokenizer = AmtTokenizer()
+    wav_segments = get_wav_segments(
+        audio_path=audio_path,
+        stride_factor=stride_factor,
+        pad_last=pad_last,
+    )
+    mid_segments = get_mid_segments(
+        mid_path=mid_path,
+        stride_factor=stride_factor,
+        pad_last=pad_last,
+    )
+
+    for wav, mid in zip(wav_segments, mid_segments):
+        if mid is not None:
+            yield (wav, mid)
+        else:
+            print(f"Skipping segment pair.")
+
+    # Keep returning with empty seqs if mid_segments exhausted
+    for wav in wav_segments:
+        yield (wav, [tokenizer.bos_tok, tokenizer.eos_tok])
 
 
 def pianoteq_cmd_fn(mid_path: str, wav_path: str):
@@ -156,10 +201,9 @@ def pianoteq_cmd_fn(mid_path: str, wav_path: str):
 
 
 def write_features(audio_path: str, mid_path: str, save_path: str):
-    features = get_wav_mid_segments(
+    features = get_paired_wav_mid_segments(
         audio_path=audio_path,
         mid_path=mid_path,
-        return_json=False,
     )
 
     # Father forgive me for I have sinned
@@ -197,10 +241,9 @@ def write_synth_features(cli_cmd_fn: Callable, mid_path: str, save_path: str):
             os.remove(audio_path_temp)
         return
     else:
-        features = get_wav_mid_segments(
+        features = get_paired_wav_mid_segments(
             audio_path=audio_path_temp,
             mid_path=mid_path,
-            return_json=False,
         )
 
         if os.path.isfile(audio_path_temp):

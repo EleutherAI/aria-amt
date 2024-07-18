@@ -7,11 +7,12 @@ import logging
 import traceback
 import threading
 import torch
-import torch.multiprocessing as multiprocessing
+import concurrent
+import multiprocessing
+import torch.multiprocessing as torch_multiprocessing
 import torch._dynamo.config
 import torch._inductor.config
 import numpy as np
-import concurrent
 
 from multiprocessing import Queue, Manager
 from multiprocessing.synchronize import Lock as LockType
@@ -27,7 +28,7 @@ from librosa.effects import _signal_to_frame_nonsilent
 from amt.inference.model import AmtEncoderDecoder
 from amt.tokenizer import AmtTokenizer
 from amt.audio import AudioTransform, SAMPLE_RATE
-from amt.data import get_wav_mid_segments
+from amt.data import get_wav_segments
 
 torch._inductor.config.coordinate_descent_tuning = True
 torch._inductor.config.triton.unique_kernel_names = True
@@ -661,24 +662,18 @@ def transcribe_file(
     logger = logging.getLogger(__name__)
 
     logger.info(f"Getting wav segments: {file_path}")
-    audio_segments = [
-        f
-        for f, _ in get_wav_mid_segments(
-            audio_path=file_path,
-            stride_factor=STRIDE_FACTOR,
-            pad_last=True,
-        )
-    ]
 
     res = []
     seq = [tokenizer.bos_tok]
     concat_seq = [tokenizer.bos_tok]
     idx = 0
-    while audio_segments:
+    for curr_audio_segment in get_wav_segments(
+        audio_path=file_path,
+        stride_factor=STRIDE_FACTOR,
+        pad_last=True,
+    ):
         init_idx = len(seq)
-
         # Add to gpu queue and wait for results
-        curr_audio_segment = audio_segments.pop(0)
         silent_intervals = _get_silent_intervals(curr_audio_segment)
         input_seq = copy.deepcopy(seq)
         gpu_task_queue.put(((curr_audio_segment, seq), pid))
@@ -855,14 +850,14 @@ def process_file(
 def watchdog(main_pids: List, child_pids: List):
     while True:
         if not all(os.path.exists(f"/proc/{pid}") for pid in main_pids):
-            print("Cleaning up children...")
+            print("Watchdog cleaning up children...")
             for pid in child_pids:
                 try:
                     os.kill(pid, signal.SIGTERM)
                 except ProcessLookupError:
                     pass
 
-            print("Finished cleaning up children")
+            print("Watchdog exit.")
             return
 
         time.sleep(1)
@@ -1014,7 +1009,7 @@ def batch_transcribe(
     start_time = time.time()
     if num_gpus > 1:
         gpu_manager_processes = [
-            multiprocessing.Process(
+            torch_multiprocessing.Process(
                 target=gpu_manager,
                 args=(
                     gpu_batch_queue,
@@ -1046,7 +1041,7 @@ def batch_transcribe(
         )
         watchdog_process.start()
     else:
-        _gpu_manager_process = multiprocessing.Process(
+        _gpu_manager_process = torch_multiprocessing.Process(
             target=gpu_manager,
             args=(
                 gpu_batch_queue,
@@ -1097,7 +1092,10 @@ def batch_transcribe(
     watchdog_process.terminate()
     watchdog_process.join()
 
-    print("Took", (time.time() - start_time) / 60, "mins to transcribe files")
+    time_taken_s = int(time.time() - start_time)
+    logger.info(
+        f"Took {int(time_taken_s // 60)}m {time_taken_s % 60}s to transcribe files"
+    )
 
 
 def quantize_int8(model: torch.nn.Module):
