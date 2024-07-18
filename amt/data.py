@@ -90,7 +90,7 @@ def get_wav_segments(
     )
 
     buffer = torch.tensor([], dtype=torch.float32)
-    for stride_seg in enumerate(stream.stream()):
+    for stride_seg in stream.stream():
         seg_chunk = stride_seg[0].mean(1)
 
         # Pad seg_chunk if required
