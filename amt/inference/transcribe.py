@@ -27,7 +27,7 @@ from librosa.effects import _signal_to_frame_nonsilent
 from amt.inference.model import AmtEncoderDecoder
 from amt.tokenizer import AmtTokenizer
 from amt.audio import AudioTransform, SAMPLE_RATE
-from amt.data import get_wav_mid_segments
+from amt.data import get_wav_segments
 
 torch._inductor.config.coordinate_descent_tuning = True
 torch._inductor.config.triton.unique_kernel_names = True
@@ -661,24 +661,18 @@ def transcribe_file(
     logger = logging.getLogger(__name__)
 
     logger.info(f"Getting wav segments: {file_path}")
-    audio_segments = [
-        f
-        for f, _ in get_wav_mid_segments(
-            audio_path=file_path,
-            stride_factor=STRIDE_FACTOR,
-            pad_last=True,
-        )
-    ]
 
     res = []
     seq = [tokenizer.bos_tok]
     concat_seq = [tokenizer.bos_tok]
     idx = 0
-    while audio_segments:
+    for curr_audio_segment in get_wav_segments(
+        audio_path=file_path,
+        stride_factor=STRIDE_FACTOR,
+        pad_last=True,
+    ):
         init_idx = len(seq)
-
         # Add to gpu queue and wait for results
-        curr_audio_segment = audio_segments.pop(0)
         silent_intervals = _get_silent_intervals(curr_audio_segment)
         input_seq = copy.deepcopy(seq)
         gpu_task_queue.put(((curr_audio_segment, seq), pid))

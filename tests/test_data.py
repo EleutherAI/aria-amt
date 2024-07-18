@@ -7,7 +7,7 @@ import torch
 import torchaudio
 import matplotlib.pyplot as plt
 
-from amt.data import get_wav_mid_segments, AmtDataset
+from amt.data import get_paired_wav_mid_segments, AmtDataset
 from amt.tokenizer import AmtTokenizer
 from amt.audio import AudioTransform
 from amt.train import get_dataloaders
@@ -64,11 +64,40 @@ def plot_spec(
 # Need to test this properly, have issues turning mel_spec back into audio
 class TestDataGen(unittest.TestCase):
     def test_wav_mid_segments(self):
-        for log_spec, seq in get_wav_mid_segments(
-            audio_path="tests/test_data/147.wav",
-            mid_path="tests/test_data/147.mid",
+        tokenizer = AmtTokenizer()
+        for idx, (wav, seq) in enumerate(
+            get_paired_wav_mid_segments(
+                audio_path="tests/test_data/147.wav",
+                mid_path="tests/test_data/147.mid",
+                stride_factor=6,
+            )
         ):
-            print(log_spec.shape, len(seq))
+            print(wav.shape, len(seq))
+            torchaudio.save(
+                f"tests/test_results/{idx}.wav", wav.unsqueeze(0), 16000
+            )
+            print(idx)
+            tokenizer._detokenize_midi_dict(seq, 30000).to_midi().save(
+                f"tests/test_results/{idx}.mid"
+            )
+
+    def test_new_wav(self):
+        from amt.data import (
+            get_wav_segments,
+            get_mid_segments,
+            get_paired_wav_mid_segments,
+        )
+
+        for idx, segs in enumerate(
+            get_paired_wav_mid_segments(
+                audio_path="/home/loubb/work/aria-amt/data/audio.mp3",
+                mid_path="/home/loubb/work/aria-amt/data/audio.mid",
+                stride_factor=3,
+                pad_last=True,
+            )
+        ):
+            a, b = segs
+            print(a.shape, len(b))
 
 
 class TestAmtDataset(unittest.TestCase):
