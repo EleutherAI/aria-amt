@@ -41,6 +41,9 @@ STRIDE_FACTOR = 3
 CHUNK_LEN_MS = LEN_MS // STRIDE_FACTOR
 
 
+# TODO: Implement continuous batching in a torch.compile friendly way
+
+
 def _setup_logger(name: str | None = None):
     logger_name = f"[{name}] " if name else ""
     logger = logging.getLogger(__name__)
@@ -185,6 +188,26 @@ def prefill(
     next_tok_ids = torch.argmax(logits, dim=-1)
 
     return logits, next_tok_ids
+
+
+# This is not used anywhere but may come in handy one days
+def calculate_input_pos(prefix_lens: torch.Tensor, prefill: bool):
+    # Given prefix lens e.g. [67, 2, 9], generates the input positions,
+    # truncate to the left with -1
+    max_pos = torch.max(prefix_lens)
+    pos_idxs = torch.stack(
+        [
+            torch.cat(
+                [
+                    torch.full((max_pos - pos,), -1, dtype=torch.long),
+                    torch.arange(pos),
+                ]
+            )
+            for pos in prefix_lens
+        ]
+    )
+
+    return pos_idxs
 
 
 @optional_bf16_autocast
@@ -389,8 +412,8 @@ def _find_min_diff_batch(tasks: List, batch_size: int):
 # - For some reason copying gpu_waiting_dict is not working properly and is
 #   leading to race conditions. I've implemented a lock to stop it.
 # - The size of gpu_batch_queue decreases before the code for deleting the
-#   corresponding entry in gpu_waiting_dict get processed. Adding a short sleep
-#   is a workaround
+#   corresponding entry in gpu_waiting_dict gets processed. Adding a short
+#   sleep is a workaround
 def gpu_batch_manager(
     gpu_task_queue: Queue,
     gpu_batch_queue: Queue,
@@ -847,16 +870,21 @@ def process_file(
     logger.info(f"{file_queue.qsize()} file(s) remaining in queue")
 
 
+def cleanup_processes(child_pids: List):
+    for pid in child_pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError as e:
+            pass
+        except Exception as e:
+            print(f"Failed to kill child process: {e}")
+
+
 def watchdog(main_pids: List, child_pids: List):
     while True:
         if not all(os.path.exists(f"/proc/{pid}") for pid in main_pids):
             print("Watchdog cleaning up children...")
-            for pid in child_pids:
-                try:
-                    os.kill(pid, signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-
+            cleanup_processes(child_pids=child_pids)
             print("Watchdog exit.")
             return
 
@@ -958,10 +986,10 @@ def batch_transcribe(
 
     if num_workers is None:
         num_workers = min(
-            min(batch_size * num_gpus, multiprocessing.cpu_count() - num_gpus),
+            min(batch_size, multiprocessing.cpu_count() - num_gpus),
             file_queue.qsize(),
         )
-    num_processes_per_worker = min(5, file_queue.qsize() // num_workers)
+    num_processes_per_worker = min(10, file_queue.qsize() // num_workers)
 
     mp_manager = Manager()
     gpu_waiting_dict = mp_manager.dict()
@@ -1070,27 +1098,33 @@ def batch_transcribe(
         )
         watchdog_process.start()
 
-    for p in worker_processes:
-        p.join()
-
-    if gpu_manager_processes is not None:
-        for p in gpu_manager_processes:
-            p.terminate()
+    try:
+        for p in worker_processes:
             p.join()
 
-    file_queue.close()
-    file_queue.join_thread()
-    gpu_task_queue.close()
-    gpu_task_queue.join_thread()
-    gpu_batch_queue.close()
-    gpu_batch_queue.join_thread()
-    result_queue.close()
-    result_queue.join_thread()
+        if gpu_manager_processes is not None:
+            for p in gpu_manager_processes:
+                p.terminate()
+                p.join()
 
-    gpu_batch_manager_process.terminate()
-    gpu_batch_manager_process.join()
-    watchdog_process.terminate()
-    watchdog_process.join()
+    except KeyboardInterrupt:
+        logger.info("Main process received KeyboardInterrupt")
+        logger.info("Cleaning up child processes")
+        cleanup_processes(child_pids=child_pids)
+        logger.info("Complete")
+    finally:
+        gpu_batch_manager_process.terminate()
+        gpu_batch_manager_process.join()
+        watchdog_process.terminate()
+        watchdog_process.join()
+        file_queue.close()
+        file_queue.join_thread()
+        gpu_task_queue.close()
+        gpu_task_queue.join_thread()
+        gpu_batch_queue.close()
+        gpu_batch_queue.join_thread()
+        result_queue.close()
+        result_queue.join_thread()
 
     time_taken_s = int(time.time() - start_time)
     logger.info(

@@ -1,14 +1,11 @@
 import glob
 from tqdm.auto import tqdm
-import pretty_midi
 import numpy as np
 import mir_eval
 import json
 import os
 
 from aria.data.midi import MidiDict, get_duration_ms
-
-pretty_midi.pretty_midi.MAX_TICK = 1e10
 
 
 def midi_to_intervals_and_pitches(midi_file_path):
