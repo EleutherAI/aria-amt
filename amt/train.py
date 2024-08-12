@@ -175,7 +175,7 @@ def get_pretrain_optim(
     num_epochs: int,
     steps_per_epoch: int,
 ):
-    LR = 5e-4
+    LR = 3e-4
     END_RATIO = 0.1
     WARMUP_STEPS = 1000
 

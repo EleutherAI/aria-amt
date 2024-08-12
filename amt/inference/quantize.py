@@ -45,7 +45,7 @@ def dynamically_quantize_per_channel(x, quant_min, quant_max, target_dtype):
 
 def replace_linear_weight_only_int8_per_channel(module):
     for name, child in module.named_children():
-        if isinstance(child, nn.Linear):
+        if isinstance(child, nn.Linear) and name != "output":
             if child.bias is not None:
                 setattr(
                     module,
@@ -71,13 +71,13 @@ class WeightOnlyInt8QuantHandler:
     @torch.no_grad()
     def create_quantized_state_dict(self):
         cur_state_dict = self.mod.state_dict()
-        for fqn, mod in self.mod.named_modules():
-            if isinstance(mod, torch.nn.Linear):
+        for name, mod in self.mod.named_modules():
+            if isinstance(mod, torch.nn.Linear) and name != "output":
                 int8_weight, scales, _ = dynamically_quantize_per_channel(
                     mod.weight.float(), -128, 127, torch.int8
                 )
-                cur_state_dict[f"{fqn}.weight"] = int8_weight.to("cpu")
-                cur_state_dict[f"{fqn}.scales"] = scales.to(
+                cur_state_dict[f"{name}.weight"] = int8_weight.to("cpu")
+                cur_state_dict[f"{name}.scales"] = scales.to(
                     mod.weight.dtype
                 ).to("cpu")
 
