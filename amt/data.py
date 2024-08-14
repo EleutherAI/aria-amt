@@ -113,7 +113,7 @@ def get_wav_segments(
     if pad_last == True:
         yield torch.nn.functional.pad(
             buffer[stride_samples:],
-            (0.0, chunk_samples - len(buffer[stride_samples:])),
+            (0, chunk_samples - len(buffer[stride_samples:])),
         )
 
 
