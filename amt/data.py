@@ -1,7 +1,6 @@
 import mmap
 import os
 import io
-import math
 import random
 import shlex
 import base64
@@ -12,7 +11,7 @@ import torch.nn.functional as F
 import torchaudio
 
 from multiprocessing import Pool, Queue, Process
-from typing import Callable
+from typing import Callable, Tuple
 
 from aria.data.midi import MidiDict
 from amt.tokenizer import AmtTokenizer
@@ -69,6 +68,7 @@ def get_wav_segments(
     audio_path: str,
     stride_factor: int | None = None,
     pad_last=False,
+    segment: Tuple[int, int] | None = None,
 ):
     assert os.path.isfile(audio_path), "Audio file not found"
     config = load_config()
@@ -83,6 +83,18 @@ def get_wav_segments(
     stride_samples = int(chunk_samples // stride_factor)
     assert chunk_samples % stride_samples == 0, "Invalid stride"
 
+    # Handle segmentation if provided
+    if segment is not None:
+        assert (
+            segment[0] < segment[1]
+        ), "Invalid segment: start must be less than end"
+        start_time_s, end_time_s = segment
+        start_sample = int(start_time_s * sample_rate)
+        end_sample = int(end_time_s * sample_rate)
+        stream.seek(start_time_s)
+    else:
+        start_sample, end_sample = 0, None
+
     stream.add_basic_audio_stream(
         frames_per_chunk=stride_samples,
         stream_index=0,
@@ -90,8 +102,15 @@ def get_wav_segments(
     )
 
     buffer = torch.tensor([], dtype=torch.float32)
+    total_samples = start_sample
     for stride_seg in stream.stream():
         seg_chunk = stride_seg[0].mean(1)
+
+        if end_sample and total_samples + seg_chunk.shape[0] > end_sample:
+            samples_to_use = end_sample - total_samples
+            seg_chunk = seg_chunk[:samples_to_use]
+
+        total_samples += seg_chunk.shape[0]
 
         # Pad seg_chunk if required
         if seg_chunk.shape[0] < stride_samples:
@@ -110,7 +129,10 @@ def get_wav_segments(
         if buffer.shape[0] == chunk_samples:
             yield buffer
 
-    if pad_last == True:
+        if end_sample and total_samples >= end_sample:
+            break
+
+    if pad_last and buffer.shape[0] > stride_samples:
         yield torch.nn.functional.pad(
             buffer[stride_samples:],
             (0, chunk_samples - len(buffer[stride_samples:])),
@@ -296,6 +318,7 @@ def build_synth_worker_fn(
 
 class AmtDataset(torch.utils.data.Dataset):
     def __init__(self, load_paths: str | list):
+        super().__init__()
         self.tokenizer = AmtTokenizer(return_tensors=True)
         self.config = load_config()["data"]
         self.mixup_fn = self.tokenizer.export_msg_mixup()
