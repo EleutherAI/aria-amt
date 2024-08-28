@@ -222,8 +222,12 @@ class AudioTransform(torch.nn.Module):
             for wav, sr in noises
         ]
 
-        for wav in noises:
+        for wav, path in zip(noises, noise_paths):
             assert wav.shape[-1] == self.num_samples, "noise wav too short"
+            assert not (
+                torch.all(wav < 0.01).item() is True
+                and torch.all(wav > -0.01).item() is True
+            ), f"Loaded wav {path} is approximately silent which can cause NaN."
 
         return noises
 

@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import json
 import glob
 
 from csv import DictReader
@@ -99,6 +100,12 @@ def _add_transcribe_args(subparser):
         "-num_workers",
         help="numer of file worker processes",
         type=int,
+    )
+    subparser.add_argument(
+        "-segments_json_path",
+        help="",
+        type=str,
+        required=False,
     )
     subparser.add_argument("-bs", help="batch size", type=int, default=16)
 
@@ -363,6 +370,7 @@ def transcribe(
     num_workers: int | None = None,
     quantize: bool = False,
     compile_mode: str | bool = False,
+    segments_json_path: str | None = None,
 ):
     """
     Transcribe audio files to midi using the given model and checkpoint.
@@ -448,13 +456,34 @@ def transcribe(
         file_paths = [load_path]
         batch_size = 1
 
+    if segments_json_path and os.path.isfile(segments_json_path):
+        with open(segments_json_path, "r") as f:
+            segments_by_audio_file = json.load(f)
+    elif segments_json_path:
+        print(f"Couldn't find json file at {segments_json_path}")
+        segments_by_audio_file = {}
+    else:
+        segments_by_audio_file = {}
+
+    files_to_process = []
+    for audio_path in file_paths:
+        if segments_by_audio_file.get(audio_path, None):
+            file_info = {
+                "path": audio_path,
+                "segments": segments_by_audio_file[audio_path],
+            }
+        else:
+            file_info = {"path": audio_path}
+
+        files_to_process.append(file_info)
+
     if multi_gpu:
         gpu_ids = [
             int(id) for id in os.getenv("CUDA_VISIBLE_DEVICES").split(",")
         ]
         print(f"Visible gpu_ids: {gpu_ids}")
         batch_transcribe(
-            file_paths=file_paths,
+            files_to_process=files_to_process,
             model=model,
             save_dir=save_dir,
             batch_size=batch_size,
@@ -467,7 +496,7 @@ def transcribe(
 
     else:
         batch_transcribe(
-            file_paths=file_paths,
+            files_to_process=files_to_process,
             model=model,
             save_dir=save_dir,
             batch_size=batch_size,
@@ -548,6 +577,7 @@ def main():
                 if args.compile and args.max_autotune
                 else "reduce-overhead" if args.compile else False
             ),
+            segments_json_path=args.segments_json_path,
         )
     else:
         print("Unrecognized command")
