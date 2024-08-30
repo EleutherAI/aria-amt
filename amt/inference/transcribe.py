@@ -35,7 +35,7 @@ torch._inductor.config.triton.unique_kernel_names = True
 torch._inductor.config.fx_graph_cache = True
 
 MAX_SEQ_LEN = 4096
-MAX_BLOCK_LEN = 2048
+MAX_BLOCK_LEN = 4096
 LEN_MS = 30000
 STRIDE_FACTOR = 3
 CHUNK_LEN_MS = LEN_MS // STRIDE_FACTOR
