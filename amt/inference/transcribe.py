@@ -35,7 +35,7 @@ torch._inductor.config.triton.unique_kernel_names = True
 torch._inductor.config.fx_graph_cache = True
 
 MAX_SEQ_LEN = 4096
-MAX_BLOCK_LEN = 4096
+MAX_BLOCK_LEN = 2048
 LEN_MS = 30000
 STRIDE_FACTOR = 3
 CHUNK_LEN_MS = LEN_MS // STRIDE_FACTOR
@@ -294,7 +294,7 @@ def process_segments(
     # to make sure that a sequence of the correct format is returned. Right now
     # it messes things up somehow
     if not all(_idx <= idx for _idx in eos_idxs):
-        logger.warning("Context length overflow when transcribing segment")
+        logger.warning("Context length overflow when transcribing segment(s)")
 
     results = [
         tokenizer.decode(seq[_idx, : eos_idxs[_idx] + 1])
