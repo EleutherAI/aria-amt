@@ -467,7 +467,7 @@ def transcribe(
 
     files_to_process = []
     for audio_path in file_paths:
-        if segments_by_audio_file.get(audio_path, None):
+        if segments_by_audio_file.get(audio_path, None) is not None:
             file_info = {
                 "path": audio_path,
                 "segments": segments_by_audio_file[audio_path],
