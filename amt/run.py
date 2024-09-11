@@ -469,9 +469,16 @@ def transcribe(
     for audio_path in file_paths:
         abs_audio_path = os.path.abspath(audio_path)
         if segments_by_audio_file.get(abs_audio_path, None) is not None:
+            # "segments": [start_s, end_s, segment_avg_score]
+            _segments = [
+                [_start, _end]
+                for _start, _end, _ in segments_by_audio_file[abs_audio_path][
+                    "segments"
+                ]
+            ]
             file_info = {
                 "path": abs_audio_path,
-                "segments": segments_by_audio_file[abs_audio_path]["segments"],
+                "segments": _segments,
             }
         else:
             file_info = {"path": abs_audio_path}
