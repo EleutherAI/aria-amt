@@ -547,7 +547,6 @@ def _truncate_seq(
         return res
 
 
-# TODO: Add detection for pedal messages which occur before notes are played
 def _process_silent_intervals(
     seq: List,
     intervals: List,
@@ -826,6 +825,7 @@ def process_file(
                 tokenized_seq=_seq,
                 len_ms=last_onset,
             )
+            mid_dict.remove_redundant_pedals()
             mid = mid_dict.to_midi()
             mid.save(_save_path)
         except Exception as e:
@@ -1026,6 +1026,10 @@ def batch_transcribe(
                 get_save_path(file_to_process["path"], input_dir, save_dir)
             ):
                 file_queue.put(file_to_process)
+
+    # If only processing one file, add even if save file exists
+    if len(files_to_process) == 1:
+        file_queue.put(files_to_process[0])
 
     logger.info(
         f"Files to process: {file_queue.qsize()}/{len(files_to_process)}"
