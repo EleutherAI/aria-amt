@@ -4,7 +4,7 @@ import torch
 import os
 
 from amt.tokenizer import AmtTokenizer
-from aria.data.midi import MidiDict
+from ariautils.midi import MidiDict
 
 logging.basicConfig(level=logging.INFO)
 if os.path.isdir("tests/test_results") is False:
@@ -19,10 +19,10 @@ class TestAmtTokenizer(unittest.TestCase):
             midi_dict = MidiDict.from_midi(f"tests/test_data/{mid_name}")
 
             logging.info(f"tokenizing {mid_name} in range ({start}, {end})...")
-            tokenized_seq = tokenizer._tokenize_midi_dict(midi_dict, start, end)
+            tokenized_seq = tokenizer.tokenize(midi_dict, start, end)
             tokenized_seq = tokenizer.decode(tokenizer.encode(tokenized_seq))
             self.assertTrue(tokenizer.unk_tok not in tokenized_seq)
-            _midi_dict = tokenizer._detokenize_midi_dict(tokenized_seq, length)
+            _midi_dict = tokenizer.detokenize(tokenized_seq, length)
             _mid = _midi_dict.to_midi()
             _mid.save(f"tests/test_results/{start}_{end}_{mid_name}")
 
@@ -43,7 +43,7 @@ class TestAmtTokenizer(unittest.TestCase):
 
         cnt = 0
         while True:
-            seq = tokenizer._tokenize_midi_dict(
+            seq = tokenizer.tokenize(
                 midi_dict, start_ms=cnt * 10000, end_ms=(cnt * 10000) + 30000
             )
             if len(seq) <= 2:
@@ -53,40 +53,40 @@ class TestAmtTokenizer(unittest.TestCase):
                 cnt += 1
 
     def test_pitch_aug(self):
-        tokenizer = AmtTokenizer(return_tensors=True)
+        tokenizer = AmtTokenizer()
         tensor_pitch_aug = tokenizer.export_tensor_pitch_aug()
 
         midi_dict_1 = MidiDict.from_midi("tests/test_data/maestro1.mid")
         midi_dict_2 = MidiDict.from_midi("tests/test_data/maestro2.mid")
         midi_dict_3 = MidiDict.from_midi("tests/test_data/maestro3.mid")
-        seq_1 = tokenizer._tokenize_midi_dict(midi_dict_1, 0, 30000)
+        seq_1 = tokenizer.tokenize(midi_dict_1, 0, 30000)
         seq_1 = tokenizer.trunc_seq(seq_1, 2048)
         seq_2 = tokenizer.trunc_seq(
-            tokenizer._tokenize_midi_dict(midi_dict_2, 0, 30000), 2048
+            tokenizer.tokenize(midi_dict_2, 0, 30000), 2048
         )
         seq_2 = tokenizer.trunc_seq(seq_2, 2048)
         seq_3 = tokenizer.trunc_seq(
-            tokenizer._tokenize_midi_dict(midi_dict_3, 0, 30000), 2048
+            tokenizer.tokenize(midi_dict_3, 0, 30000), 2048
         )
         seq_3 = tokenizer.trunc_seq(seq_3, 2048)
 
         seqs = torch.stack(
             (
-                tokenizer.encode(seq_1),
-                tokenizer.encode(seq_2),
-                tokenizer.encode(seq_3),
+                torch.tensor(tokenizer.encode(seq_1)),
+                torch.tensor(tokenizer.encode(seq_2)),
+                torch.tensor(tokenizer.encode(seq_3)),
             )
         )
         aug_seqs = tensor_pitch_aug(seqs, shift=2)
 
-        midi_dict_1_aug = tokenizer._detokenize_midi_dict(
-            tokenizer.decode(aug_seqs[0]), 30000
+        midi_dict_1_aug = tokenizer.detokenize(
+            tokenizer.decode(aug_seqs[0].tolist()), 30000
         )
-        midi_dict_2_aug = tokenizer._detokenize_midi_dict(
-            tokenizer.decode(aug_seqs[1]), 30000
+        midi_dict_2_aug = tokenizer.detokenize(
+            tokenizer.decode(aug_seqs[1].tolist()), 30000
         )
-        midi_dict_3_aug = tokenizer._detokenize_midi_dict(
-            tokenizer.decode(aug_seqs[2]), 30000
+        midi_dict_3_aug = tokenizer.detokenize(
+            tokenizer.decode(aug_seqs[2].tolist()), 30000
         )
         midi_dict_1_aug.to_midi().save("tests/test_results/pitch1.mid")
         midi_dict_2_aug.to_midi().save("tests/test_results/pitch2.mid")
@@ -94,7 +94,7 @@ class TestAmtTokenizer(unittest.TestCase):
 
     def test_aug(self):
         def aug(_midi_dict: MidiDict, _start_ms: int, _end_ms: int):
-            _tokenized_seq = tokenizer._tokenize_midi_dict(
+            _tokenized_seq = tokenizer.tokenize(
                 midi_dict=_midi_dict,
                 start_ms=_start_ms,
                 end_ms=_end_ms,
@@ -117,15 +117,9 @@ class TestAmtTokenizer(unittest.TestCase):
             )
 
             self.assertEqual(
+                len(tokenizer.detokenize(tokenized_seq, DELTA_MS).note_msgs),
                 len(
-                    tokenizer._detokenize_midi_dict(
-                        tokenized_seq, DELTA_MS
-                    ).note_msgs
-                ),
-                len(
-                    tokenizer._detokenize_midi_dict(
-                        aug_tokenized_seq, DELTA_MS
-                    ).note_msgs
+                    tokenizer.detokenize(aug_tokenized_seq, DELTA_MS).note_msgs
                 ),
             )
 
@@ -134,15 +128,11 @@ class TestAmtTokenizer(unittest.TestCase):
                     f"msg mixup: {tokenized_seq} ->\n{aug_tokenized_seq}"
                 )
 
-                _midi_dict = tokenizer._detokenize_midi_dict(
-                    tokenized_seq, DELTA_MS
-                )
+                _midi_dict = tokenizer.detokenize(tokenized_seq, DELTA_MS)
                 _mid = _midi_dict.to_midi()
                 _mid.save(f"tests/test_results/maestro2_orig.mid")
 
-                _midi_dict = tokenizer._detokenize_midi_dict(
-                    aug_tokenized_seq, DELTA_MS
-                )
+                _midi_dict = tokenizer.detokenize(aug_tokenized_seq, DELTA_MS)
                 _mid = _midi_dict.to_midi()
                 _mid.save(f"tests/test_results/maestro2_aug.mid")
 
