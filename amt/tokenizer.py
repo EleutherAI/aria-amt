@@ -6,8 +6,9 @@ import functools
 from torch import Tensor
 from collections import defaultdict
 
-from aria.data.midi import MidiDict, get_duration_ms
-from aria.tokenizer import Tokenizer
+from ariautils.midi import MidiDict, get_duration_ms
+from ariautils.tokenizer import Tokenizer
+
 from amt.config import load_config
 
 
@@ -17,8 +18,8 @@ DEBUG = os.getenv("DEBUG")
 class AmtTokenizer(Tokenizer):
     """MidiDict tokenizer designed for AMT"""
 
-    def __init__(self, return_tensors: bool = False):
-        super().__init__(return_tensors)
+    def __init__(self):
+        super().__init__()
         self.config = load_config()["tokenizer"]
         self.name = "amt"
 
@@ -239,6 +240,20 @@ class AmtTokenizer(Tokenizer):
         else:
             return prefix + [self.bos_tok] + tokenized_seq
 
+    def tokenize(
+        self,
+        midi_dict: MidiDict,
+        start_ms: int,
+        end_ms: int,
+        max_pedal_len_ms: int | None = None,
+    ):
+        return self._tokenize_midi_dict(
+            midi_dict=midi_dict,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            max_pedal_len_ms=max_pedal_len_ms,
+        )
+
     def _detokenize_midi_dict(
         self,
         tokenized_seq: list,
@@ -407,6 +422,18 @@ class AmtTokenizer(Tokenizer):
             return midi_dict, [p for p, _ in notes_to_close.items()]
         else:
             return midi_dict
+
+    def detokenize(
+        self,
+        tokenized_seq: list,
+        len_ms: int,
+        return_unclosed_notes: bool = False,
+    ):
+        return self._detokenize_midi_dict(
+            tokenized_seq=tokenized_seq,
+            len_ms=len_ms,
+            return_unclosed_notes=return_unclosed_notes,
+        )
 
     def trunc_seq(self, seq: list, seq_len: int):
         """Truncate or pad sequence to feature sequence length."""

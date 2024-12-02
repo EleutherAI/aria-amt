@@ -229,7 +229,9 @@ def process_segments(
     prefixes = [
         tokenizer.trunc_seq(prefix, MAX_BLOCK_LEN) for prefix in raw_prefixes
     ]
-    seq = torch.stack([tokenizer.encode(prefix) for prefix in prefixes]).cuda()
+    seq = torch.stack(
+        [torch.tensor(tokenizer.encode(prefix)) for prefix in prefixes]
+    ).cuda()
     eos_idxs = torch.tensor(
         [MAX_BLOCK_LEN for _ in prefixes], dtype=torch.int
     ).cuda()
@@ -294,7 +296,7 @@ def process_segments(
         logger.warning("Context length overflow when transcribing segment(s)")
 
     results = [
-        tokenizer.decode(seq[_idx, : eos_idxs[_idx] + 1])
+        tokenizer.decode(seq[_idx, : eos_idxs[_idx] + 1].tolist())
         for _idx in range(seq.shape[0])
     ]
 
@@ -339,7 +341,7 @@ def gpu_manager(
         )
 
     audio_transform = AudioTransform().cuda()
-    tokenizer = AmtTokenizer(return_tensors=True)
+    tokenizer = AmtTokenizer()
 
     try:
         while True:
@@ -526,18 +528,18 @@ def _truncate_seq(
 ):
     # Truncates and shifts a sequence by retokenizing the underlying midi_dict
     if start_ms == end_ms:
-        _mid_dict, unclosed_notes = tokenizer._detokenize_midi_dict(
+        _mid_dict, unclosed_notes = tokenizer.detokenize(
             seq, start_ms, return_unclosed_notes=True
         )
         random.shuffle(unclosed_notes)
         return [("prev", p) for p in unclosed_notes] + [tokenizer.bos_tok]
     else:
-        _mid_dict = tokenizer._detokenize_midi_dict(seq, LEN_MS)
+        _mid_dict = tokenizer.detokenize(seq, LEN_MS)
         if len(_mid_dict.note_msgs) == 0:
             return [tokenizer.bos_tok]
         else:
             # The end_ms - 1 is a workaround to get rid of the off msgs
-            res = tokenizer._tokenize_midi_dict(_mid_dict, start_ms, end_ms - 1)
+            res = tokenizer.tokenize(_mid_dict, start_ms, end_ms - 1)
 
         if res[-1] == tokenizer.eos_tok:
             res.pop()
@@ -815,7 +817,7 @@ def process_file(
                 break
 
         try:
-            mid_dict = tokenizer._detokenize_midi_dict(
+            mid_dict = tokenizer.detokenize(
                 tokenized_seq=_seq,
                 len_ms=last_onset,
             )

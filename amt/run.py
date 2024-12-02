@@ -399,7 +399,7 @@ def transcribe(
     from amt.inference.transcribe import batch_transcribe
     from amt.config import load_model_config
     from amt.inference.model import ModelConfig, AmtEncoderDecoder
-    from aria.utils import _load_weight
+    from amt.utils import _load_weight
 
     assert cuda_is_available(), "CUDA device not found"
     assert os.path.isfile(checkpoint_path), "model checkpoint file not found"

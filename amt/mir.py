@@ -5,7 +5,7 @@ import mir_eval
 import json
 import os
 
-from aria.data.midi import MidiDict, get_duration_ms
+from ariautils.midi import MidiDict, get_duration_ms
 
 
 def midi_to_intervals_and_pitches(midi_file_path):
