@@ -13,7 +13,7 @@ import torchaudio
 from multiprocessing import Pool, Queue, Process
 from typing import Callable, Tuple
 
-from aria.data.midi import MidiDict
+from ariautils.midi import MidiDict
 from amt.tokenizer import AmtTokenizer
 from amt.config import load_config
 
@@ -49,7 +49,7 @@ def get_mid_segments(
 
     start_ms = 0
     while start_ms < last_note_msg_ms:
-        mid_feature = tokenizer._tokenize_midi_dict(
+        mid_feature = tokenizer.tokenize(
             midi_dict=midi_dict,
             start_ms=start_ms,
             end_ms=start_ms + chunk_len_ms,
@@ -319,7 +319,7 @@ def build_synth_worker_fn(
 class AmtDataset(torch.utils.data.Dataset):
     def __init__(self, load_paths: str | list):
         super().__init__()
-        self.tokenizer = AmtTokenizer(return_tensors=True)
+        self.tokenizer = AmtTokenizer()
         self.config = load_config()["data"]
         self.mixup_fn = self.tokenizer.export_msg_mixup()
 
@@ -380,7 +380,12 @@ class AmtDataset(torch.utils.data.Dataset):
             seq_len=self.config["max_seq_len"],
         )
 
-        return wav, self.tokenizer.encode(src), self.tokenizer.encode(tgt), idx
+        return (
+            wav,
+            torch.tensor(self.tokenizer.encode(src)),
+            torch.tensor(self.tokenizer.encode(tgt)),
+            idx,
+        )
 
     def close(self):
         for buff in self.file_buffs:

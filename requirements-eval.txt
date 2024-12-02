@@ -1,4 +1,0 @@
-djitw @ git+https://github.com/alex2awesome/djitw.git
-librosa
-pretty_midi
-pyfluidsynth

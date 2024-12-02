@@ -23,7 +23,7 @@ from amt.model import AmtEncoderDecoder, ModelConfig
 from amt.audio import AudioTransform
 from amt.data import AmtDataset
 from amt.config import load_model_config
-from aria.utils import _load_weight
+from amt.utils import _load_weight
 
 GRADIENT_ACC_STEPS = 2
 
@@ -283,7 +283,7 @@ def _debug(wav, mel, src, tgt, idx):
         plot_spec(mel[_idx].cpu(), f"debug/{idx}/mel_{_idx}.png")
         tokenizer = AmtTokenizer()
         src_dec = tokenizer.decode(src[_idx])
-        mid_dict = tokenizer._detokenize_midi_dict(src_dec, 30000)
+        mid_dict = tokenizer.detokenize(src_dec, 30000)
         mid = mid_dict.to_midi()
         mid.save(f"debug/{idx}/mid_{_idx}.mid")
 
