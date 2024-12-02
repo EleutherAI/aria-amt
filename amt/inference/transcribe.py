@@ -1171,13 +1171,21 @@ def batch_transcribe(
         watchdog_process.join()
         gpu_batch_manager_process.terminate()
         gpu_batch_manager_process.join()
+
         file_queue.close()
         file_queue.join_thread()
         gpu_task_queue.close()
         gpu_task_queue.join_thread()
         gpu_batch_queue.close()
         gpu_batch_queue.join_thread()
+
+        for p in worker_processes:
+            if p.is_alive():
+                p.terminate()
+                p.join()
+
         mp_manager.shutdown()
+        multiprocessing.resource_tracker.unregister_after_fork = True
 
     time_taken_s = int(time.time() - start_time)
     logger.info(
