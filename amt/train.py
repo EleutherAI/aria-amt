@@ -25,8 +25,6 @@ from amt.data import AmtDataset
 from amt.config import load_model_config
 from amt.utils import _load_weight
 
-GRADIENT_ACC_STEPS = 2
-
 # ----- USAGE -----
 #
 # This script is meant to be run using the huggingface accelerate cli, see:
@@ -562,6 +560,7 @@ def resume_train(
     mode: str,
     num_workers: int,
     batch_size: int,
+    grad_acc_steps: int,
     epochs: int,
     checkpoint_dir: str,
     resume_epoch: int,
@@ -582,7 +581,7 @@ def resume_train(
 
     tokenizer = AmtTokenizer()
     accelerator = accelerate.Accelerator(
-        project_dir=project_dir, gradient_accumulation_steps=GRADIENT_ACC_STEPS
+        project_dir=project_dir, gradient_accumulation_steps=grad_acc_steps
     )
     if accelerator.is_main_process:
         project_dir = setup_project_dir(project_dir)
@@ -605,7 +604,7 @@ def resume_train(
         f"epochs={epochs}, "
         f"num_proc={accelerator.num_processes}, "
         f"batch_size={batch_size}, "
-        f"grad_acc_steps={GRADIENT_ACC_STEPS}, "
+        f"grad_acc_steps={grad_acc_steps}, "
         f"num_workers={num_workers}, "
         f"checkpoint_dir={checkpoint_dir}, "
         f"resume_step={resume_step}, "
@@ -638,13 +637,13 @@ def resume_train(
         optimizer, scheduler = get_pretrain_optim(
             model,
             num_epochs=epochs,
-            steps_per_epoch=len(train_dataloader) // GRADIENT_ACC_STEPS,
+            steps_per_epoch=len(train_dataloader) // grad_acc_steps,
         )
     elif mode == "finetune":
         optimizer, scheduler = get_finetune_optim(
             model,
             num_epochs=epochs,
-            steps_per_epoch=len(train_dataloader) // GRADIENT_ACC_STEPS,
+            steps_per_epoch=len(train_dataloader) // grad_acc_steps,
         )
     else:
         raise Exception
@@ -697,6 +696,7 @@ def train(
     mode: str,
     num_workers: int,
     batch_size: int,
+    grad_acc_steps: int,
     epochs: int,
     finetune_cp_path: str | None = None,  # loads ft optimizer and cp
     steps_per_checkpoint: int | None = None,
@@ -716,7 +716,7 @@ def train(
 
     tokenizer = AmtTokenizer()
     accelerator = accelerate.Accelerator(
-        project_dir=project_dir, gradient_accumulation_steps=GRADIENT_ACC_STEPS
+        project_dir=project_dir, gradient_accumulation_steps=grad_acc_steps
     )
     if accelerator.is_main_process:
         project_dir = setup_project_dir(project_dir)
@@ -731,7 +731,7 @@ def train(
         f"epochs={epochs}, "
         f"num_proc={accelerator.num_processes}, "
         f"batch_size={batch_size}, "
-        f"grad_acc_steps={GRADIENT_ACC_STEPS}, "
+        f"grad_acc_steps={grad_acc_steps}, "
         f"num_workers={num_workers}"
     )
 
@@ -767,13 +767,13 @@ def train(
         optimizer, scheduler = get_pretrain_optim(
             model,
             num_epochs=epochs,
-            steps_per_epoch=len(train_dataloader) // GRADIENT_ACC_STEPS,
+            steps_per_epoch=len(train_dataloader) // grad_acc_steps,
         )
     elif mode == "finetune":
         optimizer, scheduler = get_finetune_optim(
             model,
             num_epochs=epochs,
-            steps_per_epoch=len(train_dataloader) // GRADIENT_ACC_STEPS,
+            steps_per_epoch=len(train_dataloader) // grad_acc_steps,
         )
     else:
         raise Exception
@@ -844,6 +844,12 @@ def parse_resume_args():
     argp.add_argument("-repoch", help="resume epoch", type=int, required=True)
     argp.add_argument("-epochs", help="train epochs", type=int, required=True)
     argp.add_argument("-bs", help="batch size", type=int, default=32)
+    argp.add_argument(
+        "-grad_acc_steps",
+        help="gradient accumulation steps",
+        type=int,
+        default=1,
+    )
     argp.add_argument("-workers", help="number workers", type=int, default=1)
     argp.add_argument("-pdir", help="project dir", type=str, required=False)
     argp.add_argument(
@@ -863,6 +869,12 @@ def parse_train_args():
     )
     argp.add_argument("-epochs", help="train epochs", type=int, required=True)
     argp.add_argument("-bs", help="batch size", type=int, default=32)
+    argp.add_argument(
+        "-grad_acc_steps",
+        help="gradient accumulation steps",
+        type=int,
+        default=1,
+    )
     argp.add_argument("-workers", help="number workers", type=int, default=1)
     argp.add_argument("-pdir", help="project dir", type=str, required=False)
     argp.add_argument(
@@ -895,6 +907,7 @@ if __name__ == "__main__":
             mode="pretrain",
             num_workers=train_args.workers,
             batch_size=train_args.bs,
+            grad_acc_steps=train_args.grad_acc_steps,
             epochs=train_args.epochs,
             steps_per_checkpoint=train_args.spc,
             project_dir=train_args.pdir,
@@ -908,6 +921,7 @@ if __name__ == "__main__":
             mode="finetune",
             num_workers=train_args.workers,
             batch_size=train_args.bs,
+            grad_acc_steps=train_args.grad_acc_steps,
             epochs=train_args.epochs,
             finetune_cp_path=train_args.cpath,
             steps_per_checkpoint=train_args.spc,
@@ -922,6 +936,7 @@ if __name__ == "__main__":
             mode="pretrain" if resume_args.resume_mode == "pt" else "finetune",
             num_workers=resume_args.workers,
             batch_size=resume_args.bs,
+            grad_acc_steps=resume_args.grad_acc_steps,
             epochs=resume_args.epochs,
             checkpoint_dir=resume_args.cdir,
             resume_step=resume_args.rstep,
