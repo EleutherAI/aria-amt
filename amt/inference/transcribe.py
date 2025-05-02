@@ -1024,9 +1024,7 @@ def batch_transcribe(
 
     # If only processing one file, add even if save file exists
     if len(files_to_process) == 1:
-        # TODO: This workaround should be reimplemented properly
-        while not file_queue.empty():
-            file_queue.get()
+        file_queue = Queue()
         file_queue.put(files_to_process[0])
 
     logger.info(
