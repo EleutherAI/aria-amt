@@ -6,10 +6,8 @@ build-backend = "setuptools.build_meta"
 name = "aria-amt"
 version = "0.0.1"
 description = ""
-authors = [{name = "louis bradshaw", email = "loua19@outlook.com"}]
-requires-python = ">=3.11"
-license = {text = "apache-2.0"}
-readme = "readme.md"
+authors = [{name = "Louis Bradshaw", email = "loua19@outlook.com"}]
+requires-python = ">=3.10"
 
 dependencies = [
     "ariautils @ git+https://github.com/EleutherAI/aria-utils.git",
