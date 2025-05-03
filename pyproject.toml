@@ -7,7 +7,7 @@ name = "aria-amt"
 version = "0.0.1"
 description = ""
 authors = [{name = "Louis Bradshaw", email = "loua19@outlook.com"}]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 
 dependencies = [
     "ariautils @ git+https://github.com/EleutherAI/aria-utils.git",
