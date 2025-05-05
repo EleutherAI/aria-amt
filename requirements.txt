@@ -1,8 +1,0 @@
-ariautils @ git+https://github.com/EleutherAI/aria-utils.git
-torch >= 2.3
-torchaudio
-accelerate 
-librosa
-tqdm
-orjson
-mir_eval
