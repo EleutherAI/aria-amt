@@ -235,11 +235,13 @@ class AudioTransform(torch.nn.Module):
     def apply_reverb(self, wav: torch.Tensor):
         # wav: (bz, L)
         if self.num_impulse == 0:
-            logging.warning("Warning: No files in amt/assets/impulse - skipping apply_reverb")
+            logging.warning(
+                "Warning: No files in amt/assets/impulse - skipping apply_reverb"
+            )
             return wav
         elif self.reverb_factor == 0:
             return wav
-        
+
         batch_size, _ = wav.shape
 
         reverb_strength = (
@@ -265,7 +267,9 @@ class AudioTransform(torch.nn.Module):
 
     def apply_noise(self, wav: torch.tensor):
         if self.num_noise == 0:
-            logging.warning("Warning: No files in amt/assets/noise - skipping apply_noise")
+            logging.warning(
+                "Warning: No files in amt/assets/noise - skipping apply_noise"
+            )
             return wav
 
         batch_size, _ = wav.shape
@@ -283,7 +287,9 @@ class AudioTransform(torch.nn.Module):
 
     def apply_applause(self, wav: torch.tensor):
         if self.num_applause == 0:
-            logging.warning("Warning: No files in amt/assets/applause - skipping apply_applause")
+            logging.warning(
+                "Warning: No files in amt/assets/applause - skipping apply_applause"
+            )
             return wav
 
         batch_size, _ = wav.shape
