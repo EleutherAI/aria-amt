@@ -757,16 +757,17 @@ def transcribe_file(
                 logger.info(f"Seen eos_tok in audio chunk {idx}: {file_path}")
                 seq = seq[:-1]
 
+            concat_seq += _shift_onset(
+                seq[init_idx:],
+                idx * CHUNK_LEN_MS,
+            )
+
             if len(next_seq) == 1:
                 logger.info(
                     f"Skipping audio chunk {idx} (silence): {file_path}"
                 )
                 seq = [tokenizer.bos_tok]
             else:
-                concat_seq += _shift_onset(
-                    seq[init_idx:],
-                    idx * CHUNK_LEN_MS,
-                )
                 seq = next_seq
 
         idx += 1
@@ -879,7 +880,7 @@ def process_file(
         logger.info(
             f"Finished file: {file_path} (segment: {idx if idx is not None else 'full'})"
         )
-        if len(seq) < 500:
+        if len(seq) < 10:
             logger.info(
                 f"Skipping seq - too short (segment {idx if idx is not None else 'full'})"
             )

@@ -64,6 +64,33 @@ def get_mid_segments(
         start_ms += stride_len_ms
 
 
+def _get_single_wav_segment(
+    audio_path: str,
+    sample_rate: int,
+    orig_sample_rate: int,
+    segment_samples: tuple[int] | None = None,
+):
+    if segment_samples is not None:
+        start_sample, end_sample = segment_samples
+        orig_start_sample = int(start_sample * (orig_sample_rate / sample_rate))
+        orig_end_sample = int(end_sample * (orig_sample_rate / sample_rate))
+
+        wav, _ = torchaudio.load(
+            audio_path,
+            frame_offset=orig_start_sample,
+            num_frames=orig_end_sample - orig_start_sample,
+        )
+        wav = wav.mean(0)
+    else:
+        wav, _ = torchaudio.load(audio_path)
+        wav = wav.mean(0)
+
+    wav = torchaudio.functional.resample(
+        wav, orig_freq=orig_sample_rate, new_freq=sample_rate
+    )
+    return wav
+
+
 def get_wav_segments(
     audio_path: str,
     stride_factor: int | None = None,
@@ -95,48 +122,72 @@ def get_wav_segments(
     else:
         start_sample, end_sample = 0, None
 
-    stream.add_basic_audio_stream(
-        frames_per_chunk=stride_samples,
-        stream_index=0,
-        sample_rate=sample_rate,
+    wav_info = torchaudio.info(audio_path)
+    seg_len_s = (
+        end_time_s - start_time_s
+        if segment is not None
+        else wav_info.num_frames / wav_info.sample_rate
     )
 
-    buffer = torch.tensor([], dtype=torch.float32)
-    total_samples = start_sample
-    for stride_seg in stream.stream():
-        seg_chunk = stride_seg[0].mean(1)
-
-        if end_sample and total_samples + seg_chunk.shape[0] > end_sample:
-            samples_to_use = end_sample - total_samples
-            seg_chunk = seg_chunk[:samples_to_use]
-
-        total_samples += seg_chunk.shape[0]
-
-        # Pad seg_chunk if required
-        if seg_chunk.shape[0] < stride_samples:
-            seg_chunk = F.pad(
-                seg_chunk,
-                (0, stride_samples - seg_chunk.shape[0]),
-                mode="constant",
-                value=0.0,
-            )
-
-        if buffer.shape[0] < chunk_samples:
-            buffer = torch.cat((buffer, seg_chunk), dim=0)
-        else:
-            buffer = torch.cat((buffer[stride_samples:], seg_chunk), dim=0)
-
-        if buffer.shape[0] == chunk_samples:
-            yield buffer
-
-        if end_sample and total_samples >= end_sample:
-            break
-
-    if pad_last and buffer.shape[0] > stride_samples:
-        yield torch.nn.functional.pad(
-            buffer[stride_samples:],
-            (0, chunk_samples - len(buffer[stride_samples:])),
+    if seg_len_s <= chunk_len:
+        # Short audio segment - yield only one segment
+        wav = _get_single_wav_segment(
+            audio_path=audio_path,
+            sample_rate=sample_rate,
+            orig_sample_rate=wav_info.sample_rate,
+            segment_samples=(
+                (start_sample, end_sample) if segment is not None else None
+            ),
         )
+        if pad_last is True:
+            yield torch.nn.functional.pad(wav, (0, chunk_samples - len(wav)))
+        else:
+            yield wav
+
+    else:
+        # Yield segments in order
+        stream.add_basic_audio_stream(
+            frames_per_chunk=stride_samples,
+            stream_index=0,
+            sample_rate=sample_rate,
+        )
+
+        buffer = torch.tensor([], dtype=torch.float32)
+        total_samples = start_sample
+        for stride_seg in stream.stream():
+            seg_chunk = stride_seg[0].mean(1)
+
+            if end_sample and total_samples + seg_chunk.shape[0] > end_sample:
+                samples_to_use = end_sample - total_samples
+                seg_chunk = seg_chunk[:samples_to_use]
+
+            total_samples += seg_chunk.shape[0]
+
+            # Pad seg_chunk if required
+            if seg_chunk.shape[0] < stride_samples:
+                seg_chunk = F.pad(
+                    seg_chunk,
+                    (0, stride_samples - seg_chunk.shape[0]),
+                    mode="constant",
+                    value=0.0,
+                )
+
+            if buffer.shape[0] < chunk_samples:
+                buffer = torch.cat((buffer, seg_chunk), dim=0)
+            else:
+                buffer = torch.cat((buffer[stride_samples:], seg_chunk), dim=0)
+
+            if buffer.shape[0] == chunk_samples:
+                yield buffer
+
+            if end_sample and total_samples >= end_sample:
+                break
+
+        if pad_last and buffer.shape[0] > stride_samples:
+            yield torch.nn.functional.pad(
+                buffer[stride_samples:],
+                (0, chunk_samples - len(buffer[stride_samples:])),
+            )
 
 
 def get_paired_wav_mid_segments(
