@@ -17,7 +17,7 @@ Download the preliminary model weights:
 Piano (v1)
 
 ```
-wget https://storage.googleapis.com/aria-checkpoints/amt/piano-medium-double-1.0.safetensors
+wget "https://huggingface.co/datasets/loubb/aria-midi/resolve/main/piano-medium-double-1.0.safetensors?download=true"
 ```
 
 ## Usage
