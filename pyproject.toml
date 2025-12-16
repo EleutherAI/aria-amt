@@ -12,7 +12,7 @@ requires-python = ">=3.11"
 dependencies = [
     "ariautils @ git+https://github.com/EleutherAI/aria-utils.git",
     "torch>=2.3",
-    "torchaudio",
+    "torchaudio <= 2.5",
     "safetensors",
     "librosa",
     "tqdm",
